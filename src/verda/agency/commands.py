@@ -1,6 +1,7 @@
 """Local entry points. Starting the API does not silently start a model worker."""
 import json
 import time
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,11 @@ def add_commands(parser, commands):
     parser.add_argument('--supervisor-agent', default='manager', help='Supervisor agent key; empty string disables root result routing')
     commands.add_parser('agency-init')
     commands.add_parser('agency-status')
+    subscription=commands.add_parser('agency-subscription')
+    subscription.add_argument('file',type=Path)
+    resolve=commands.add_parser('agency-source-resume')
+    resolve.add_argument('incident_id')
+    resolve.add_argument('--note',required=True)
     retry = commands.add_parser('agency-records-retry')
     retry.add_argument('delivery_id')
     demo = commands.add_parser('agency-demo')
@@ -47,6 +53,12 @@ def run(args):
     command = args.command
     if command == 'agency-init':
         return {'initialized': True, 'agents': len(config.agents), 'tools': len(config.tools)}
+    if command == 'agency-subscription':
+        store.register_subscription(**json.loads(args.file.read_text()))
+        return {'registered':True}
+    if command == 'agency-source-resume':
+        store.resolve_source(args.incident_id,args.note)
+        return {'resolved':args.incident_id}
     if command == 'agency-status':
         return store.overview()
     if command == 'agency-records-retry':
@@ -85,13 +97,18 @@ def run(args):
     steps = 0
     try:
         while args.continuous or steps < args.max_steps:
-            store.tick()
-            worked = engine.step(mode='local')
+            try:store.tick()
+            except sqlite3.Error:
+                from verda.agency.health import worker_health
+                engine.storage_error='SQLiteError'
+                worker_health(store,engine.worker_id,'local','storage_error','SQLiteError')
+                worked=False
+            else:worked = engine.step(mode='local')
             steps += 1
             if not worked:
                 if not args.continuous:
                     break
-                time.sleep(1)
+                time.sleep(5)
     finally:
         engine.close()
-    return {'worker_iterations': steps}
+    return {'worker_iterations': steps, 'storage_error':engine.storage_error}

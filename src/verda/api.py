@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import sqlite3
 import time
 import threading
 from pathlib import Path
@@ -103,6 +104,12 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
         except KeyError:
             raise HTTPException(404, 'Record not found')
 
+    @app.get("/control/private/health", dependencies=[Depends(viewer)])
+    def agency_health():
+        if agency_store is None:raise HTTPException(503,'Agency not configured')
+        from verda.agency.health import inspect_health
+        return inspect_health(agency_store)
+
     @app.get("/control/private/agency", dependencies=[Depends(viewer)])
     def agency_view(listing_ref: str | None = None, trace_id: str | None = None):
         if agency_store is None:
@@ -110,7 +117,9 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
         from verda.agency.engine import default_registry, PROTOCOL
         from verda.agency.inspection import tool_description, connection_descriptions
         registry = default_registry(agency_store.config)
-        return {**agency_store.overview(listing_ref=listing_ref, trace_id=trace_id),
+        try:overview=agency_store.overview(listing_ref=listing_ref,trace_id=trace_id)
+        except sqlite3.Error:raise HTTPException(503,'Kayıt deposuna erişilemiyor; işlemler duraklatıldı.')
+        return {**overview,
                 "agents": [a.model_dump() for a in agency_store.config.agents],
                 "tools": [tool_description(registry, t) for t in agency_store.config.tools],
                 "connections": connection_descriptions(agency_store.config),

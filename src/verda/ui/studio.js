@@ -240,6 +240,7 @@ function renderStudio(root) {
     } else if (kind === 'record') {
       recordInspector(panel,'outcome',key);
     } else if (kind === 'service') {
+      panel.append(subscriptionList());
       panel.append(e('p','ORTAK SERVİS · STATİK KOD','eyebrow'),e('h2','Ortak kayıt servisi'),e('p','Araç çıktısını olduğu gibi kaydeder. Görev bitince veya engellenince sonucu ve kanıt kimliklerini teslim eder. Model kullanmaz.'),studioFields([['Üst görev varsa','Sonuç mevcut üst göreve döner'],['Doğrudan operatör işi','Yöneticiye değerlendirme görevi oluşturur'],['Teslim bekleyen',String(data.records.pending_count)],['Teslim engeli',String(data.records.blocked_count)]]),e('p','Kuyruğa teslim edilmesi, yöneticinin değerlendirmeyi bitirdiği anlamına gelmez. Worker çalıştığında sıradaki görevi alır.','inspector-note'),studioButton('Bulguları ve sonuçları aç',()=>{view='records';render();}));
     } else if (kind === 'agent') {
       const a = data.agents.find(a => a.key === key); if (!a) return;
@@ -249,6 +250,7 @@ function renderStudio(root) {
       const tools = studioSection('Kullanabildiği araçlar');
       VerdaGraph.capabilities(data,key).forEach(cap=>tools.append(capabilityButton(cap,inspect)));
       if (!a.tools.length) tools.append(e('p','Atanmış araç yok.','muted')); panel.append(tools);
+      panel.append(subscriptionList(key));
       const triggers = studioSection('Bu agent’ı tetikleyen kayıtlar');
       data.triggers.filter(t => t.spec.agent === key).forEach(t => triggers.append(studioButton((t.enabled ? 'Etkin' : 'Pasif') + ' · ' + t.key, () => inspect('trigger:' + t.key))));
       if (triggers.children.length === 1) triggers.append(e('p','Kayıtlı tetikleyici yok.','muted')); panel.append(triggers);

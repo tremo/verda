@@ -43,6 +43,7 @@
     if(data.records){
       nodes.push(node('service:records','service','records','Ortak kayıt servisi',310+columns.length*450,height/2-50,{width:250,height:115}));
       data.agents.forEach(a=>edges.push({from:'agent:'+a.key,to:'service:records',kind:'recorded',label:'Bulgu ve sonuç kaydı'}));
+      [...new Set((data.subscriptions||[]).filter(s=>s.enabled&&s.target_agent!==data.supervisor_agent).map(s=>s.target_agent))].forEach(key=>{if(data.agents.some(a=>a.key===key))edges.push({from:'service:records',to:'agent:'+key,kind:'returned',label:'Olay aboneliği'});});
       if(data.supervisor_agent&&data.agents.some(a=>a.key===data.supervisor_agent))edges.push({from:'service:records',to:'agent:'+data.supervisor_agent,kind:'returned',label:'Sonucu kuyruğa teslim eder'});
     }
     return {nodes,edges};
@@ -110,8 +111,7 @@
       outcomes.forEach((o,j)=>{
         nodes.push(node('record:'+o.id,'record',o.id,o.kind==='manager_decision'?'Yönetici kararı':'Kaydedilen sonuç',670+j*260,205+i*310,{outcome:o}));
         edges.push({from:'task:'+t.id,to:'record:'+o.id,kind:'recorded',label:'Sonuç ve kanıtlar saklandı'});
-        const delivery=(data.records?.deliveries||[]).find(d=>d.outcome_id===o.id);
-        if(delivery?.state==='delivered'&&taskIds.has(delivery.target_task_id))edges.push({from:'record:'+o.id,to:'task:'+delivery.target_task_id,kind:'returned',label:'Kuyruğa teslim edildi'});
+        (data.records?.deliveries||[]).filter(d=>d.outcome_id===o.id&&d.state==='delivered'&&taskIds.has(d.target_task_id)).forEach(d=>edges.push({from:'record:'+o.id,to:'task:'+d.target_task_id,kind:'returned',label:d.processing_state==='processed'?'Değerlendirildi':'Kuyruğa teslim edildi'}));
       });
       if (!outcomes.length && result && taskIds.has(t.parent_id)) edges.push({from:'task:' + t.id, to:'task:' + t.parent_id, kind:'returned', label:'Sonuç döndü'});
     });

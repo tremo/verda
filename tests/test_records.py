@@ -219,6 +219,11 @@ def test_v3_migration_keeps_old_tasks_without_replaying_history(tmp_path):
     store,registry=setup(tmp_path);origin=perform(store,registry)
     with store.transaction() as con:
         for table in ('record_deliveries','record_outcomes','observations'):con.execute('DROP TABLE '+table)
+        for table in ('record_events','record_subscriptions','incident_tasks','source_incidents'):
+            con.execute('DROP TABLE '+table)
+        con.execute('ALTER TABLE inbox DROP COLUMN retry')
+        con.execute('ALTER TABLE tool_calls DROP COLUMN operation_key')
+        con.execute('ALTER TABLE tool_calls DROP COLUMN attempt')
         con.execute('ALTER TABLE inbox DROP COLUMN record_version')
         con.execute('ALTER TABLE inbox DROP COLUMN caused_by_task_id')
         con.execute('UPDATE agency_meta SET version=3')

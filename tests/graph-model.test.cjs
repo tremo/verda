@@ -98,3 +98,29 @@ test('direct operator result routes through recorded outcome to causal manager t
   data.records.deliveries[0].state='pending';
   assert(!run(data,'one').edges.some(e=>e.kind==='returned'));
 });
+
+
+test('a result can return to requester and supervisor through distinct delivery receipts',()=>{
+  const data={...config,tasks:[
+    {id:'parent',agent:'research',trace_id:'one',created_at:0,source:'user'},
+    {id:'child',agent:'sahibinden',parent_id:'parent',trace_id:'one',created_at:1},
+    {id:'review',agent:'manager',caused_by_task_id:'child',trace_id:'one',created_at:2}
+  ],events:[],records:{outcomes:[{id:'result',task_id:'child',version:1,state:'complete',observation_ids:[]}],deliveries:[
+    {outcome_id:'result',state:'delivered',target_task_id:'parent',processing_state:'processed'},
+    {outcome_id:'result',state:'delivered',target_task_id:'review',processing_state:'waiting'}
+  ]}};
+  const graph=run(data,'one');
+  const returns=graph.edges.filter(e=>e.from==='record:result');
+  assert.equal(returns.length,2);
+  assert.equal(returns.find(e=>e.to==='task:parent').label,'Değerlendirildi');
+  assert.equal(returns.find(e=>e.to==='task:review').label,'Kuyruğa teslim edildi');
+});
+
+test('custom event subscriber gets a service edge only when enabled',()=>{
+  const data={...config,triggers:[],connections:[],records:{},supervisor_agent:'manager',subscriptions:[
+    {target_agent:'research',enabled:1},{target_agent:'parcel',enabled:0}
+  ]};
+  const graph=VerdaGraph.agentNetwork(data);
+  assert(graph.edges.some(e=>e.from==='service:records'&&e.to==='agent:research'));
+  assert(!graph.edges.some(e=>e.from==='service:records'&&e.to==='agent:parcel'));
+});

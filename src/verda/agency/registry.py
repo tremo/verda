@@ -83,6 +83,15 @@ class ResourceBlocked(RuntimeError):
     """An adapter reports CAPTCHA, rate limiting or session loss. Stop the resource."""
 
 
+class TransientToolError(RuntimeError):
+    """Adapter explicitly reports a retryable read failure; writes stay uncertain."""
+    def __init__(self, code='source_unavailable', retry_after_seconds=0):
+        super().__init__(code)
+        if not isinstance(retry_after_seconds,(int,float)) or not 0 <= retry_after_seconds <= 86400:
+            raise ValueError('Invalid retry delay')
+        self.retry_after_seconds=retry_after_seconds
+
+
 class Registry:
     def __init__(self, config: AgencyConfig, handlers: dict[str, Callable] | None = None):
         self.config = config

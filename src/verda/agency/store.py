@@ -11,6 +11,7 @@ from uuid import uuid4
 from verda.legacy import canonical, digest
 from verda.agency.registry import AgencyConfig
 from verda.agency.records import RecordService, OUTCOME_STATES
+from verda.agency.events import EventBus, migrate_v5, DELIVERY_DELAYS, READ_DELAYS
 
 TERMINAL = {'complete', 'cancelled', 'failed'}
 
@@ -44,7 +45,7 @@ class AgencyStore:
         with self.transaction() as con:
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if tables:
-                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3, 4}:
+                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3, 4, 5}:
                     raise ValueError('Foreign agency database')
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 1:
                     con.execute('ALTER TABLE inbox ADD COLUMN executor_tool TEXT')
@@ -57,6 +58,8 @@ class AgencyStore:
                     con.execute('ALTER TABLE inbox ADD COLUMN record_version INTEGER NOT NULL DEFAULT 0')
                     self.records.install(con)
                     con.execute('UPDATE agency_meta SET version=4')
+                if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 4:
+                    migrate_v5(con)
                 return
             for sql in [
                 'CREATE TABLE agency_meta(version INTEGER PRIMARY KEY)', 'INSERT INTO agency_meta VALUES(4)',
@@ -84,6 +87,7 @@ class AgencyStore:
             ]:
                 con.execute(sql)
             self.records.install(con)
+            migrate_v5(con)
 
     def worker_status(self, worker_id, mode, state, *, now=None):
         if mode not in {'local', 'synthetic'} or state not in {'processing', 'idle', 'stopped'}:
@@ -147,14 +151,16 @@ class AgencyStore:
     def _expire(self, con, now):
         for task in con.execute("SELECT * FROM inbox WHERE state='running' AND lease_until<=?", (now,)).fetchall():
             calls = con.execute("SELECT * FROM tool_calls WHERE task_id=? AND state='started'", (task['id'],)).fetchall()
+            incident=None
             for call in calls:
                 con.execute("UPDATE tool_calls SET state='uncertain' WHERE id=?", (call['id'],))
                 if call['resource']:
                     con.execute("UPDATE resources SET halted='uncertain_execution',owner=NULL WHERE key=?", (call['resource'],))
+                    incident=self._source_incident(con,task,call['resource'],'uncertain_execution',now)
             con.execute("UPDATE inbox SET state=?,reason='worker_lost',token=NULL,lease_until=NULL WHERE id=?",
                         ('uncertain' if calls else 'blocked', task['id']))
             self._event(con, task, 'worker_lost', {'automatic_retry': False}, now)
-            self._record_outcome(con, task, 'uncertain' if calls else 'blocked', None, 'worker_lost', now)
+            self._record_outcome(con, task, 'uncertain' if calls else 'blocked', None, 'worker_lost', now, incident)
 
     def claim(self, *, mode, now=None):
         now = time.time() if now is None else now
@@ -167,6 +173,7 @@ class AgencyStore:
                 return None
             token = uuid4().hex
             con.execute("UPDATE inbox SET state='running',token=?,lease_until=? WHERE id=?", (token, now + 600, task['id']))
+            EventBus.progress(con, task['id'], 'running', now)
             self._event(con, task, 'turn_started', {'agent': task['agent'], 'inputs': json.loads(task['inputs'])}, now)
             return {**dict(task), 'token': token, 'state': 'running'}
 
@@ -184,6 +191,11 @@ class AgencyStore:
             return {'task_id': task['id'], 'objective': task['objective'], 'inputs': json.loads(task['inputs']),
                     'listing_ref': task['listing_ref'], 'mode': task['mode'],
                     'received_records': self.records.task_context(con, task),
+                    'received_events': EventBus.received(con, task),
+                    'source_incidents': [dict(r) for r in con.execute('''SELECT DISTINCT i.* FROM source_incidents i
+                        JOIN record_events e ON e.record_id=i.id AND e.record_kind='incident'
+                        JOIN record_deliveries d ON d.event_id=e.id WHERE d.target_task_id=? AND d.state='delivered'
+                        AND i.mode=?''',(task['id'],task['mode']))],
                     'record_reads': [json.loads(e['data']) for e in events if e['kind'] == 'record_read'][-1:],
                     'history': [{'kind': e['kind'], 'data': json.loads(e['data'])} for e in events
                                 if e['kind'] in {'decision', 'tool_finished', 'delegated', 'resumed'}][-24:],
@@ -204,52 +216,76 @@ class AgencyStore:
             self._owned(con, task, now)
             if state == 'complete' and con.execute("SELECT 1 FROM inbox WHERE parent_id=? AND state!='complete' LIMIT 1", (task['id'],)).fetchone():
                 state, reason, result = 'waiting_children', 'awaiting_delegated_work', None
+            if state == 'complete' and con.execute("SELECT 1 FROM record_deliveries WHERE target_task_id=? AND state='delivered' AND wake=1 AND started_at IS NULL LIMIT 1",(task['id'],)).fetchone():
+                state,reason,result='queued','new_notifications_arrived',None
             con.execute('UPDATE inbox SET state=?,reason=?,result=?,pending=NULL,token=NULL,lease_until=NULL WHERE id=?',
                         (state, reason, canonical(result) if result is not None else None, task['id']))
             self._event(con, task, 'task_' + state, {'reason': reason, 'result': result}, now)
             self._record_outcome(con, task, state, result, reason, now)
 
-    def _record_outcome(self, con, task, state, result, reason, now):
+    def _record_outcome(self, con, task, state, result, reason, now, incident_id=None):
         if state not in OUTCOME_STATES:
             return
-        outcome = self.records.outcome(con, task, state, result, reason, self.supervisor_agent, now)
+        outcome = self.records.outcome(con, task, state, result, reason, self.supervisor_agent, now, incident_id)
+        EventBus.progress(con, task['id'], state, now)
         self._event(con, task, 'outcome_recorded', {'outcome_id': outcome, 'state': state}, now)
         if task['parent_id']:
             self._wake_parent(con, task, state, result, now)
-            con.execute("UPDATE record_deliveries SET state='delivered',attempts=1,delivered_at=? WHERE outcome_id=?", (now, outcome))
+            con.execute("UPDATE record_deliveries SET state='delivered',attempts=1,delivered_at=? WHERE outcome_id=? AND route='parent'", (now, outcome))
             self._event(con, task, 'record_delivered', {'outcome_id': outcome, 'target_task_id': task['parent_id'], 'route': 'parent'}, now)
 
-    def dispatch_record_events(self, *, mode, now=None):
-        """Atomic durable outbox -> supervisor inbox. Never re-executes the source tool."""
-        now = time.time() if now is None else now
-        created = []
+    def register_subscription(self, **spec):
         with self.transaction() as con:
-            rows = con.execute("SELECT * FROM record_deliveries WHERE state='pending' AND mode=? ORDER BY created_at,id LIMIT 50", (mode,)).fetchall()
+            EventBus.register(con,self.agents,**spec)
+
+    def dispatch_record_events(self, *, mode, now=None):
+        """Each recipient commits independently; source tools never run on redelivery."""
+        now = time.time() if now is None else now
+        created=[]
+        with self.transaction() as con:
+            rows=con.execute("SELECT d.* FROM record_deliveries d JOIN record_events e ON e.id=d.event_id WHERE d.state='pending' AND d.mode=? AND d.available_at<=? ORDER BY e.rowid,d.id LIMIT 100",(mode,now)).fetchall()
             for delivery in rows:
                 con.execute('SAVEPOINT deliver_record')
+                target=None
                 try:
-                    task = con.execute('SELECT * FROM inbox WHERE id=?', (delivery['task_id'],)).fetchone()
-                    target = self._submit(con, agent=delivery['target_agent'],
-                        objective='Ortak kayıt servisinden gelen görev sonucunu ve kanıtlarını değerlendir. Gerekliyse sonraki işi belirle; gerekmiyorsa sonucu özetleyip tamamla. Eksik veya engellenmiş işi tamamlanmış sayma. Sentetik kayıtları açıkça örnek olarak belirt.',
-                        inputs={'outcome_id': delivery['outcome_id'], 'origin_task_id': task['id']},
-                        request_key='record:' + delivery['outcome_id'], source='record:' + delivery['outcome_id'],
-                        mode=task['mode'], priority=task['priority'], listing_ref=task['listing_ref'], caused_by=task, now=now)
-                    con.execute("UPDATE record_deliveries SET state='delivered',target_task_id=?,attempts=attempts+1,error=NULL,delivered_at=? WHERE id=?", (target, now, delivery['id']))
-                    self._event(con, task, 'record_delivered', {'outcome_id': delivery['outcome_id'], 'target_task_id': target, 'route': 'supervisor'}, now)
+                    if delivery['target_agent'] not in self.agents:raise ValueError('Unknown subscriber')
+                    task=con.execute('SELECT * FROM inbox WHERE id=?',(delivery['task_id'],)).fetchone()
+                    target=delivery['target_task_id']
+                    if delivery['wake'] and target is None:
+                        target=self._submit(con, agent=delivery['target_agent'],
+                            objective='Ortak kayıt servisinden gelen olayı ve kanıtlarını değerlendir. Gerekliyse sonraki işi belirle; gerekmiyorsa sonucu özetleyip tamamla. Engel veya belirsizlik giderilmediyse giderilmiş sayma. Sentetik olayları örnek olarak belirt.',
+                            inputs={'event_id':delivery['event_id'],'outcome_id':delivery['outcome_id'],'origin_task_id':task['id']},
+                            request_key='delivery:'+delivery['id'],source='record:'+delivery['event_id'],
+                            mode=task['mode'],priority=task['priority'],listing_ref=task['listing_ref'],caused_by=task,now=now)
+                        created.append(target)
+                    con.execute("""UPDATE record_deliveries SET state='delivered',target_task_id=?,attempts=attempts+1,
+                        error=NULL,delivered_at=?,processing_state=? WHERE id=?""",
+                        (target,now,'waiting' if delivery['wake'] else 'observed',delivery['id']))
+                    if target and delivery['wake']:
+                        # Routine evidence is bound to the evaluation that consumes its task outcome.
+                        con.execute("""UPDATE record_deliveries SET target_task_id=?,processing_state='waiting'
+                            WHERE task_id=? AND target_agent=? AND state='delivered' AND wake=0
+                            AND target_task_id IS NULL AND created_at<=?""",(target,task['id'],delivery['target_agent'],delivery['created_at']))
+                    self._event(con,task,'record_delivered',{'event_id':delivery['event_id'],'outcome_id':delivery['outcome_id'],
+                        'target_agent':delivery['target_agent'],'target_task_id':target,'route':delivery['route'],'wake':bool(delivery['wake'])},now)
                     con.execute('RELEASE deliver_record')
-                    created.append(target)
                 except Exception as error:
-                    con.execute('ROLLBACK TO deliver_record')
-                    con.execute('RELEASE deliver_record')
-                    con.execute("UPDATE record_deliveries SET state='blocked',attempts=attempts+1,error=? WHERE id=?", (type(error).__name__, delivery['id']))
+                    con.execute('ROLLBACK TO deliver_record');con.execute('RELEASE deliver_record')
+                    if target in created:created.remove(target)
+                    attempt=delivery['attempts']+1
+                    transient=isinstance(error,(TimeoutError,ConnectionError)) or (
+                        isinstance(error,sqlite3.OperationalError) and getattr(error,'sqlite_errorcode',None) in {sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED})
+                    retry=transient and attempt<=len(DELIVERY_DELAYS)
+                    con.execute("UPDATE record_deliveries SET state=?,attempts=?,error=?,available_at=? WHERE id=?",
+                        ('pending' if retry else 'blocked',attempt,type(error).__name__,
+                         now+DELIVERY_DELAYS[attempt-1] if retry else now,delivery['id']))
         return created
 
     def retry_record_delivery(self, delivery_id):
         with self.transaction() as con:
-            row = con.execute('SELECT * FROM record_deliveries WHERE id=?', (delivery_id,)).fetchone()
-            if not row or row['state'] != 'blocked':
-                raise ValueError('Only blocked record deliveries can retry')
-            con.execute("UPDATE record_deliveries SET state='pending',error=NULL WHERE id=?", (delivery_id,))
+            row=con.execute('SELECT * FROM record_deliveries WHERE id=?',(delivery_id,)).fetchone()
+            if not row or row['state']!='blocked':raise ValueError('Only blocked record deliveries can retry')
+            con.execute("UPDATE record_deliveries SET state='pending',error=NULL,available_at=0 WHERE id=?",(delivery_id,))
 
     def record_detail(self, kind, record_id):
         table = {'observation': 'observations', 'outcome': 'record_outcomes'}.get(kind)
@@ -259,6 +295,7 @@ class AgencyStore:
             result = self.records.decode(con.execute(f'SELECT * FROM {table} WHERE id=?', (record_id,)).fetchone(), full=True)
             if kind == 'outcome':
                 result['observations'] = [self.records.decode(con.execute('SELECT * FROM observations WHERE id=?', (key,)).fetchone(), full=True) for key in result['observation_ids']]
+            result['deliveries']=[dict(r) for r in con.execute('SELECT d.* FROM record_deliveries d JOIN record_events e ON e.id=d.event_id WHERE e.record_kind=? AND e.record_id=?',(kind,record_id))]
             return result
 
     def read_record(self, task, record_id, offset=0, now=None):
@@ -317,10 +354,42 @@ class AgencyStore:
             self._event(con, task, 'delegated', {'child_id': child, 'to_agent': target, 'objective': objective, 'inputs': inputs, 'await_result': wait}, now)
             return child
 
+    def _source_incident(self, con, task, resource, reason, now):
+        incident=con.execute("SELECT * FROM source_incidents WHERE resource=? AND mode=? AND state='open'",(resource,task['mode'])).fetchone()
+        if incident is None:
+            key=uuid4().hex
+            con.execute("INSERT INTO source_incidents(id,resource,mode,reason,state,created_at) VALUES(?,?,?,?,'open',?)",(key,resource,task['mode'],reason,now))
+            EventBus.emit(con,task,'source.blocked','incident',key,self.supervisor_agent,now,
+                          {'incident_id':key,'resource':resource,'reason':reason})
+        else:key=incident['id']
+        con.execute('INSERT OR IGNORE INTO incident_tasks VALUES(?,?)',(key,task['id']))
+        return key
+
+    def resolve_source(self, incident_id, note, now=None):
+        """Explicit local operator action after fixing access. Uncertain effects stay quarantined."""
+        if not isinstance(note,str) or not note.strip() or len(note)>2000:raise ValueError('Resolution evidence required')
+        now=time.time() if now is None else now
+        with self.transaction() as con:
+            incident=con.execute("SELECT * FROM source_incidents WHERE id=? AND state='open'",(incident_id,)).fetchone()
+            if not incident:raise ValueError('Open source incident required')
+            resource=con.execute('SELECT * FROM resources WHERE key=?',(incident['resource'],)).fetchone()
+            if resource['owner'] or con.execute("SELECT 1 FROM tool_calls WHERE resource=? AND state IN ('uncertain','started') LIMIT 1",(incident['resource'],)).fetchone():
+                raise ValueError('Uncertain or active operations require reconciliation first')
+            con.execute("UPDATE source_incidents SET state='resolved',resolved_at=?,resolution=? WHERE id=?",(now,note,incident_id))
+            con.execute('UPDATE resources SET halted=NULL WHERE key=?',(incident['resource'],))
+            tasks=con.execute('SELECT t.* FROM inbox t JOIN incident_tasks i ON i.task_id=t.id WHERE i.incident_id=?',(incident_id,)).fetchall()
+            for task in tasks:
+                pending=json.loads(task['pending']) if task['pending'] else None
+                tool=next((t for t in self.config.tools if pending and t.key==pending.get('target')),None)
+                if task['state']=='blocked' and task['config_revision']==self.config.revision and tool and tool.effect=='read':
+                    con.execute("UPDATE inbox SET state='queued',reason=NULL,available_at=?,retry=NULL WHERE id=?",(now,task['id']))
+                    self._event(con,task,'source_resumed',{'incident_id':incident_id},now)
+            if tasks:EventBus.emit(con,tasks[0],'source.recovered','incident',incident_id,self.supervisor_agent,now,{'incident_id':incident_id,'resource':incident['resource']})
+
     def begin_tool(self, task, tool, arguments, now=None):
         now = time.time() if now is None else now
         with self.transaction() as con:
-            self._owned(con, task, now)
+            owned=self._owned(con, task, now)
             if tool.resource:
                 con.execute('INSERT OR IGNORE INTO resources(key) VALUES(?)', (tool.resource,))
                 resource = con.execute('SELECT * FROM resources WHERE key=?', (tool.resource,)).fetchone()
@@ -331,39 +400,54 @@ class AgencyStore:
                                 (state, why, max(now + 1, resource['next_at']), task['id']))
                     self._event(con, task, 'tool_deferred', {'tool': tool.key, 'reason': why}, now)
                     if state == 'blocked':
-                        self._record_outcome(con, task, state, None, why, now)
+                        incident=self._source_incident(con,task,tool.resource,why,now)
+                        self._record_outcome(con, task, state, None, why, now, incident)
                     return None
+            operation_key=task['id']+':'+str(owned['turns'])
+            attempt=con.execute('SELECT count(*) FROM tool_calls WHERE operation_key=?',(operation_key,)).fetchone()[0]+1
             call_id = uuid4().hex
-            con.execute('INSERT INTO tool_calls(id,task_id,tool,resource,effect,state,arguments,started_at) VALUES(?,?,?,?,?,?,?,?)',
-                        (call_id, task['id'], tool.key, tool.resource, tool.effect, 'started', canonical(arguments), now))
+            con.execute('INSERT INTO tool_calls(id,task_id,tool,resource,effect,state,arguments,started_at,operation_key,attempt) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                        (call_id, task['id'], tool.key, tool.resource, tool.effect, 'started', canonical(arguments), now,operation_key,attempt))
             if tool.resource:
                 con.execute('UPDATE resources SET owner=? WHERE key=?', (call_id, tool.resource))
-            self._event(con, task, 'tool_started', {'call_id': call_id, 'tool': tool.key, 'transport': tool.transport,
-                                                  'arguments': arguments, 'effect': tool.effect}, now)
+            self._event(con, task, 'tool_started', {'call_id': call_id, 'operation_key':operation_key,'attempt':attempt,
+                'tool': tool.key, 'transport': tool.transport,'arguments': arguments, 'effect': tool.effect}, now)
             return call_id
 
-    def finish_tool(self, task, tool, call_id, *, result=None, error=None, halt=False, now=None):
+    def finish_tool(self, task, tool, call_id, *, result=None, error=None, halt=False,
+                    transient=False, retry_after=0, now=None):
         now = time.time() if now is None else now
         with self.transaction() as con:
             self._owned(con, task, now)
             call = con.execute("SELECT * FROM tool_calls WHERE id=? AND task_id=? AND state='started'", (call_id, task['id'])).fetchone()
-            if call is None:
-                raise RuntimeError('tool_call_not_owned')
+            if call is None:raise RuntimeError('tool_call_not_owned')
             uncertain = error is not None and tool.effect == 'write'
+            retry=error is not None and transient and not halt and not uncertain and call['attempt']<=len(READ_DELAYS)
+            next_at=now+max(tool.min_interval_seconds,READ_DELAYS[call['attempt']-1],retry_after) if retry else now+tool.min_interval_seconds
             state = 'uncertain' if uncertain else 'failed' if error else 'complete'
             con.execute('UPDATE tool_calls SET state=?,result=?,finished_at=? WHERE id=?',
                         (state, canonical({'output': result, 'error': error}), now, call_id))
             if tool.resource:
                 con.execute('UPDATE resources SET owner=NULL,next_at=?,halted=? WHERE key=? AND owner=?',
-                            (now + tool.min_interval_seconds, error if halt or uncertain else None, tool.resource, call_id))
-            con.execute('UPDATE inbox SET state=?,reason=?,pending=NULL,token=NULL,lease_until=NULL WHERE id=?',
-                        ('uncertain' if uncertain else 'blocked' if error else 'queued', error, task['id']))
+                            (next_at, error if halt or uncertain else None, tool.resource, call_id))
+            final_reason='read_retries_exhausted:'+error if error and transient and not retry and not uncertain else error
+            info={'tool':tool.key,'category':'transient_read','attempt':call['attempt'],
+                  'max_attempts':len(READ_DELAYS)+1,'next_at':next_at} if retry else None
+            con.execute("""UPDATE inbox SET state=?,reason=?,pending=CASE WHEN ? THEN pending ELSE NULL END,
+                retry=?,available_at=?,token=NULL,lease_until=NULL WHERE id=?""",
+                ('queued' if retry or not error else 'uncertain' if uncertain else 'blocked',final_reason,
+                 retry or halt,canonical(info) if info else None,next_at if retry else now,task['id']))
             self._event(con, task, 'tool_finished', {'call_id': call_id, 'tool': tool.key, 'state': state,
                                                    'output': result, 'error': error}, now)
-            if error:
-                self._record_outcome(con, task, 'uncertain' if uncertain else 'blocked', None, error, now)
+            if retry:
+                self._event(con,task,'task_retry_scheduled',info,now)
+                EventBus.emit(con,task,'task.retry_scheduled','attempt',call_id,self.supervisor_agent,now,info)
+            elif error:
+                incident=self._source_incident(con,task,tool.resource,error,now) if tool.resource and (halt or uncertain) else None
+                self._record_outcome(con,task,'uncertain' if uncertain else 'blocked',None,
+                                     final_reason,now,incident)
             else:
-                record = self.records.observe(con, task, tool, call, result, now)
+                record = self.records.observe(con, task, tool, call, result, now, self.supervisor_agent)
                 self._event(con, task, 'observation_recorded', {'observation_id': record, 'call_id': call_id}, now)
 
     def resume(self, task_id, inputs, now=None):
@@ -393,7 +477,7 @@ class AgencyStore:
             tasks = []
             for row in con.execute(query + ' ORDER BY created_at DESC,id DESC LIMIT 200', params):
                 t = dict(row)
-                for k in ('inputs', 'definition', 'pending', 'result'):
+                for k in ('inputs', 'definition', 'pending', 'result', 'retry'):
                     t[k] = json.loads(t[k]) if t[k] else None
                 t.pop('token'); t.pop('request_hash')
                 tasks.append(t)
@@ -405,6 +489,9 @@ class AgencyStore:
                 events = [{**dict(r), 'data': json.loads(r['data'])} for r in rows[:1000]][::-1]
             return {'tasks': tasks, 'events': events, 'resources': [dict(r) for r in con.execute('SELECT * FROM resources')],
                     'records': self.records.summary(con, ids), 'supervisor_agent': self.supervisor_agent,
+                    'subscriptions': EventBus.subscriptions(con,self.supervisor_agent),
+                    'incidents': [{**dict(r),'tasks':[t[0] for t in con.execute('SELECT task_id FROM incident_tasks WHERE incident_id=?',(r['id'],))]} for r in con.execute('SELECT * FROM source_incidents ORDER BY created_at DESC LIMIT 100')],
+                    'error_policy': {'read_attempts':len(READ_DELAYS)+1,'read_delays':READ_DELAYS,'delivery_attempts':len(DELIVERY_DELAYS)+1,'delivery_delays':DELIVERY_DELAYS,'uncertain_write_retry':False},
                     'triggers': [{**dict(r), 'spec': json.loads(r['spec'])} for r in con.execute('SELECT * FROM triggers')],
                     'limits': {'tasks': 200, 'events': 1000}, 'total_tasks': total, 'task_counts': counts,
                     'tasks_truncated': total > len(tasks), 'events_truncated': more_events,

@@ -10,6 +10,7 @@ import math
 from uuid import uuid4
 
 from verda.legacy import canonical, digest
+from verda.agency.events import EventBus
 
 
 OUTCOME_STATES = {'complete', 'blocked', 'uncertain', 'failed', 'cancelled', 'waiting_user'}
@@ -55,7 +56,7 @@ class RecordService:
             fields['parcel_key'] = {'value': payload['parcel_key']}
         return fields
 
-    def observe(self, con, task, tool, call, payload, now):
+    def observe(self, con, task, tool, call, payload, now, supervisor=None):
         encoded = canonical(payload)
         if len(encoded.encode()) > 32768:
             raise ValueError('record_payload_too_large')
@@ -72,10 +73,11 @@ class RecordService:
                     (record_id, call['id'], task['id'], task['agent'], task['trace_id'], listing_ref, task['mode'],
                      tool.key, tool.resource, kind, now, call['arguments'], encoded, digest(payload),
                      canonical(self.normalized_fields(payload))))
+        EventBus.emit(con, task, 'observation.recorded', 'observation', record_id, supervisor, now)
         return record_id
 
     @staticmethod
-    def outcome(con, task, state, result, reason, supervisor, now):
+    def outcome(con, task, state, result, reason, supervisor, now, incident_id=None):
         if state not in OUTCOME_STATES:
             return None
         current = con.execute('SELECT record_version FROM inbox WHERE id=?', (task['id'],)).fetchone()
@@ -94,16 +96,8 @@ class RecordService:
                     (record_id, task['id'], version, task['agent'], task['trace_id'], task['listing_ref'], task['mode'],
                      state, reason, canonical(result) if result is not None else None, kind, now, canonical(observation_ids)))
         con.execute('UPDATE inbox SET record_version=? WHERE id=?', (version, task['id']))
-        if task['parent_id']:
-            parent = con.execute('SELECT agent FROM inbox WHERE id=?', (task['parent_id'],)).fetchone()
-            route, target, target_task = 'parent', parent['agent'], task['parent_id']
-        elif supervisor and task['agent'] != supervisor:
-            route, target, target_task = 'supervisor', supervisor, None
-        else:
-            # Supervisor outcomes are records, not a new request to review itself.
-            return record_id
-        con.execute('''INSERT INTO record_deliveries(id,outcome_id,task_id,mode,route,target_agent,target_task_id,created_at)
-            VALUES(?,?,?,?,?,?,?,?)''', (uuid4().hex, record_id, task['id'], task['mode'], route, target, target_task, now))
+        EventBus.emit(con, task, 'task.'+state, 'outcome', record_id, supervisor, now,
+                      {'state':state,'reason':reason,'incident_id':incident_id})
         return record_id
 
     @staticmethod
@@ -161,4 +155,5 @@ class RecordService:
                 'outcome_count': con.execute('SELECT count(*) FROM record_outcomes' + where, task_ids).fetchone()[0],
                 'pending_count': con.execute("SELECT count(*) FROM record_deliveries WHERE state='pending'").fetchone()[0],
                 'blocked_count': con.execute("SELECT count(*) FROM record_deliveries WHERE state='blocked'").fetchone()[0],
+                'events': [{**dict(r),'data':json.loads(r['data'])} for r in con.execute('SELECT * FROM record_events'+where+' ORDER BY created_at DESC LIMIT 200',task_ids)],
                 'limit': 200}

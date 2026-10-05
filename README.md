@@ -59,29 +59,50 @@ Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicile
 
 Üst durum kartları panelin açık olmasıyla görev yürütücüsünün çalışmasını ayırır. Worker bildirimi işlenirken en fazla 600 saniye, boşta 15 saniye geçerlidir; normal kapanışta durdu olarak kaydedilir. Bu gösterge işletim sistemi süreç denetimi değildir; ani kapanış son bildirim süresi dolana kadar görünmeyebilir. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz. Varsayılan kayıtta bir çalışır Python hesaplaması vardır; bağımsız script ve MCP aracı henüz eklenmemiştir.
 
-### Ortak kayıt servisi ve yöneticiye sonuç dönüşü
+### Ortak kayıt servisi, abonelikler ve hata yönetimi
 
-Bu akış uygulanmıştır. `agency/records.py` aynı uygulama içinde normal Python kodu olarak çalışır; ayrı bir agent veya model çağrısı değildir. Agent'lar SQL yazmaz. Çalışma motoru başarılı araç çıktısını, araç çağrısının tamamlanma kaydıyla aynı işlemde değişmez bir gözlem olarak saklar. Fiyat, alan, rakım ve parsel kimliği için basit tip/alan normalleştirmesi vardır. Ham çıktı, araç/görev/agent kimliği, çalışma modu, ilan bağı, kayıt zamanı ve içerik özeti korunur. Kayıt zamanı kaynağın gözlem zamanı gibi sunulmaz; adaptör bildirirse kaynak zamanı/URL ham çıktıda yer alır.
+Kayıt servisi aynı uygulamadaki statik Python kodudur. Agent SQL yazmaz. Başarılı araç çıktısı, araç makbuzu ve `observation.recorded` olayı aynı SQLite işleminde saklanır. Ham çıktı, çağrı/görev/agent kimliği, ilan ve çalışma izi, mod, kayıt zamanı ve içerik özeti korunur. Basit fiyat/alan/rakım/parsel alanları kaynak bildirimi olarak normalleştirilir; bağımsız doğrulanmış bilgi sayılmaz. Yeni bulgu eskisini ezmez.
 
-| Aşama | Davranış |
+**İşi isteyene cevap ve yöneticiye bildirim ayrı teslimlerdir.** Her olay-alıcı çifti tekildir. Üst görev varsa sonucu alır; üst görev başka bir agent'a aitse yönetici de kendi teslimini alır. Üst görev zaten yöneticiye aitse ikinci yönetici işi oluşmaz. Ek agent'lar filtreli aboneliklerle aynı olayları alabilir. Panel kalıcı olayların salt okunur görünümüdür; kendisi model tüketicisi değildir.
+
+Varsayılan yönetici aboneliği rutin bulguları ve yeniden deneme bilgilerini gelen kutusunda **bilgi** olarak tutar; bu kayıtlar model çağrısı oluşturmaz. Görev tamamlanması veya müdahale gerektiren durum değerlendirme başlatır. Bir görevin ara bulguları sonuçla birlikte değerlendirilir. Aynı kaynağın engellediği işler tek kaynak olayı altında toplanır; yeni etkilenen işler ayrı yönetici değerlendirmesi açmaz. Bildirim değerlendirmesinin kendi sonucu tekrar değerlendirme başlatmaz; denetim kaydı olarak kalır. Aynı iz en fazla 100 görev içerir.
+
+Teslim ve işlenme farklı alanlardır: `pending/delivered/blocked`, ardından `waiting/processing/processed/attention`. Bilgi teslimi `observed` olarak görünür. İşlemeye başlama, alıcının görevi sahiplenmesiyle; değerlendirme onayı görevin tamamlanmasıyla kaydedilir. Araç çıktısının kaydedilmesi veya kuyruğa teslim edilmesi değerlendirme tamamlandı anlamına gelmez. Bir karar turu başladıktan sonra yeni sonuç gelirse görülmemiş sonuç onaylanmaz; görev tamamlanmadan önce yeni bildirimle tekrar çalışır. Eski teslimlerde bulunmayan işleme zamanları uydurulmaz.
+
+Abonelikler yerel CLI ile yönetilir:
+
+```json
+{
+  "key": "research-results",
+  "target_agent": "research",
+  "event_types": ["task.complete"],
+  "source_agents": ["sahibinden"],
+  "mode": "synthetic",
+  "wake": true,
+  "enabled": true
+}
+```
+
+`verda agency-subscription FILE` aynı anahtardaki aboneliği günceller. Türler: `observation.recorded`, `task.complete`, `task.blocked`, `task.uncertain`, `task.failed`, `task.cancelled`, `task.waiting_user`, `task.retry_scheduled`, `source.blocked`, `source.recovered`. Mod `local`, `synthetic` veya `both` olabilir. Filtre değişikliği yalnız sonraki olayları etkiler; mevcut teslimlerin hedefleri ve kimlikleri korunur. `--supervisor-agent KEY` varsayılan yönetici hedefini seçer; boş değer otomatik yönetici aboneliğini kapatır, açıkça kaydedilmiş abonelikleri silmez.
+
+| Hata | Uygulanan davranış |
 |---|---|
-| Araç bulgusu | Kayıt servisi değişmez `observations` kaydı ekler; yeni değer eskisini ezmez |
-| Görev tamamlandı veya engellendi | Sonuç, neden ve gözlem kimlikleri sürümlü `record_outcomes` kaydına yazılır |
-| Görevi başka agent vermişti | Sonuç mevcut üst göreve teslim edilir; bekleyen üst görev devam eder |
-| Zamanlayıcı/kullanıcı doğrudan operatöre verdi | Kalıcı teslim kuyruğu yöneticinin gelen işlerine değerlendirme görevi ekler |
-| Yönetici değerlendirdi | Kararı ayrıca kaydedilir; kendisine sonsuz değerlendirme zinciri oluşturmaz |
+| Geçici okuma hatası | Adaptörün `TransientToolError`, `TimeoutError` veya `ConnectionError` bildirmesi gerekir. Toplam 3 deneme, en az 60 ve 300 saniye bekleme; kaynak aralığı/adaptör bekleme süresi daha uzunsa o uygulanır. Aynı karar, girdi ve işlem kimliği korunur. Her deneme ayrı makbuzdur. |
+| Kalıcı/hangi tür olduğu bilinmeyen hata | Otomatik tekrar yapılmaz; görev engellenmiş sonuçla raporlanır. |
+| Kaynak engeli | `ResourceBlocked` ilgili kaynağı durdurur. CAPTCHA, oturum kaybı, 403/429 gibi durumları canlı adaptörün doğru sınıflandırması gerekir. Henüz canlı adaptör yoktur. |
+| Geçici bildirim teslim hatası | Alıcı başına toplam 3 deneme; 5 ve 30 saniye bekleme. Kaynak araç tekrar çağrılmaz. Eksik alıcı/yapılandırma hatası doğrudan incelemeye ayrılır. |
+| Belirsiz dış yazma | Kaynak karantinaya alınır; gönderim otomatik tekrarlanmaz. Gerçek konuşma geçmişiyle doğrulama adaptörü henüz yoktur. |
+| Kayıt deposu hatası | Yeni dış işlem başlamaz. Dış işlemden sonra kayıt başarısız olmuşsa başlamış çağrı korunur; sahiplik süresi dolunca belirsiz olarak durdurulur. |
 
-**Operatör → ortak kayıt → yönetici** yolu artık doğrudan operatör işlerinde de vardır. Çıktı ile sonucun ayrılması, çok araçlı bir görevin her ara çıktısı için yeni yönetici işi açılmasını önler. Engellenme, belirsiz yürütme, kullanıcı girdisi bekleme, hata ve iptal sonuçları da raporlanır. Üst görevi olmayan yönetici işi kendine yeni iş üretmez. Farklı agent'lar üzerinden devam eden aynı iz en fazla 100 görevle sınırlıdır.
+`verda agency-records-retry DELIVERY_ID` nedeni giderilmiş teslimi yeniden beklemeye alır; kümülatif deneme sayısını silmez. `verda agency-source-resume INCIDENT_ID --note "Erişim nasıl düzeltildi"` açık kaynak olayını kapatır ve aynı tanımla bekleyen okuma işlerini kaynak hız sınırına tabi olarak devam ettirir. Aktif veya sonucu belirsiz çağrı varsa bu komut reddedilir. Bu işlem kullanıcıya ait yerel yönetim komutudur; modelin aracı değildir. Canlı mesaj gönderimi mevcut politika kapısından halen geçemez.
 
-Sonuç ve teslim kaydı aynı SQLite işleminde oluşur. Worker her adımın başında bekleyen kayıtları kuyruğa aktarır. Değerlendirme görevinin eklenmesi ve teslimin işaretlenmesi de tek işlemdir; yeniden başlama ve eşzamanlı teslimde aynı sonuç iki göreve dönüşmez. Bu garanti kuyruk teslimine aittir; dış sitede bir mesajın tam bir kez gönderilmesi ayrı bir konu ve henüz uygulanmış değildir. Teslimin tamamlanması yöneticinin değerlendirmeyi bitirdiği anlamına gelmez.
+`/control/private/health` kuyruktan bağımsız olarak depoya erişimi ve yazma kilidini kontrol eder. Worker kayıt hatasını ayrıca veritabanının yanındaki özel `.health/` dizinine yazar. Panel bu kontrolü görünürken 15 saniyede bir okur; sunucuya erişemiyorsa gösterilen verinin eski olabileceğini belirtir. Kontrol gelecekteki her disk yazmasının başarılı olacağını garanti etmez. Mac kapalıyken dışarıdan izleyen bir bulut servisi yoktur.
 
-Hedef agent yoksa veya teslim başarısızsa kayıt korunur ve `blocked` teslim olarak görünür. Yapılandırma düzeltildikten sonra `verda agency-records-retry DELIVERY_ID` teslimi tekrar beklemeye alır; kaynak aracını yeniden çağırmaz. Hedef varsayılan olarak `manager`dır; global `--supervisor-agent KEY` ile değişebilir, açıkça boş değer verilirse doğrudan işlerin yöneticiye yönlendirilmesi kapatılır. Mevcut teslimler oluşturuldukları hedefi korur.
+**Bildirimler ve hatalar** sekmesinde abonelik filtreleri, alıcıların ayrı teslim/işleme zamanları, sonraki denemeler ve kaynak olayından etkilenen işler görünür. Agent denetleyicisinde abonelikler ve haritada kayıt servisi bağlantıları vardır. Çalışma izindeki sonuç birden fazla alıcıya bağlanabilir. Büyük kanıtlar görev kapsamlı kayıt okumasıyla parçalar halinde alınır; yalnız kendi veya teslim edilmiş kanıtlara erişilir.
 
-Yöneticiye kısa sonuç ve kanıtlar verilir. Büyük bulgulara görev kapsamlı `kind=record` okuma işlemiyle 8.000 karakterlik parçalar halinde erişilir. Agent yalnız kendi bulgularını veya kendisine teslim edilmiş kanıtları okuyabilir; görev girdisine başka bir kayıt kimliği yazmak erişim sağlamaz. Yerel ve sentetik görevler aynı teslim kuyruğunda birbirine karışmaz.
+Şema v5 geçişi eski gözlem, sonuç, görev ve teslim kimliklerini korur. Eski sonuçlar için yeni alıcılar eklenmez ve geçmiş işler yeniden çalıştırılmaz. Önceki sürümde teslim edilmiş sonuçların işleme onayı `legacy` olarak belirtilir. Yükseltmeden önce veritabanı yedeği alınmalıdır.
 
-**Ortak kayıtlar** sekmesinde kaynak bulguları, sonuçlar ve teslim durumu açılır. Ana haritada ortak kayıt servisi görünür; **Çalışma izi** üzerinde kayıt düğümü, operatör sonucunun hangi yönetici görevine ulaştığını gösterir. Yönetici değerlendirme görevi ilk görevle aynı iz ve ilan bağına sahiptir. Eski sürümde tamamlanmış işler geriye dönük yeniden değerlendirilmez. Şema v4 geçişi mevcut görevleri korur; yükseltmeden önce veritabanı yedeği alınmalıdır.
-
-Bu katman kaynak bildirimlerini saklar; bağımsız doğrulanmış nihai ilan bilgisi değildir. Kanıt kabulü, çelişki çözümü, koordinat sistemleri, ilan adaylığına bağlayıcı politika uygulanması ve mevcut dashboard'a yayın henüz tamamlanmadı. Karar/yorum, ham kaynak bulgusundan ayrı tutulur. Canlı browser ve mesaj politikası da ayrı tamamlanacak parçalardır.
+Bu katman kaynak bildirimlerini ve değerlendirmeleri saklar. Nihai kanıt kabulü, çelişki çözümü, ilan adaylığına bağlayıcı politika uygulanması, canlı browser/mesaj doğrulaması ve eski dashboard'a yayın ayrı tamamlanacak parçalardır.
 
 ## Ürün hedefi: n8n tarzı görsel otomasyon stüdyosu
 
@@ -224,7 +245,7 @@ Zamanlayıcı JSON kaydı `key`, `kind: "timer"`, `next_at` (UTC Unix zamanı), 
 
 ### Açık kalan alan işleri
 
-Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Seçilmiş Chrome oturumu, Sahibinden/TKGM bağlantıları, gerçek kanıt kabulü, nihai ilan bilgi görünümü, mesaj kurallarının uygulanması ve teslimat uzlaştırması, genel cron/saat dilimi desteği, kontrol panelinden düzenleme/başlatma ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrıların yeniden denenmesi ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
+Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Seçilmiş Chrome oturumu, Sahibinden/TKGM bağlantıları, gerçek kanıt kabulü, nihai ilan bilgi görünümü, mesaj kurallarının uygulanması ve teslimat uzlaştırması, genel cron/saat dilimi desteği, kontrol panelinden düzenleme/başlatma ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrılar otomatik tekrarlanmaz; dış kaynak doğrulaması ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
 
 Sahibinden için 180 saniye **araç çağrısı** aralığı tanımlıdır; bir araç birden çok site isteği yapıyorsa alt tarayıcı katmanı da bunları sınırlamalıdır. Bu sitenin izin verdiği veya engellemeyeceği bir sınır değildir. Önceki 5 işlik grup/30 dakika mola önerisi henüz uygulanmamıştır.
 

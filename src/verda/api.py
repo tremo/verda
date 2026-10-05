@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -10,17 +11,34 @@ from sqlalchemy.orm import Session
 from verda.agents import catalog
 from verda.policy import Policy, ScreeningFacts, evaluate
 from verda.storage import Case, DashboardSnapshot, Snapshot, SourceRow, TimelineEvent
+from verda.workflow import WorkflowStore, research_plan
 
 
-def create_app(engine: Engine, token: str) -> FastAPI:
+class WorkflowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_key: str = Field(min_length=1, max_length=128, pattern=r"\S")
+
+
+def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("An API token of at least 32 characters is required")
-    app = FastAPI(title="Verda v2 — shadow backend", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Verda v2 — shadow backend", version="0.2.0", docs_url=None, redoc_url=None, openapi_url=None)
 
     def authorize(authorization: str | None = Header(default=None)):
         expected = "Bearer " + token
-        if not authorization or not secrets.compare_digest(authorization, expected):
+        if not authorization or not secrets.compare_digest(authorization.encode(), expected.encode()):
             raise HTTPException(status_code=401, detail="Authentication required")
+
+    def local_command(origin: str | None = Header(default=None)):
+        # This API has no browser writer yet. Only token-authenticated local
+        # clients without an Origin header may create/cancel workflow runs.
+        if origin is not None:
+            raise HTTPException(403, "Browser-origin commands are not enabled")
+
+    def workflows() -> WorkflowStore:
+        if workflow_store is None:
+            raise HTTPException(503, "Workflow storage is not configured")
+        return workflow_store
 
     def database():
         with Session(engine) as session:
@@ -108,5 +126,34 @@ def create_app(engine: Engine, token: str) -> FastAPI:
         if not row:
             raise HTTPException(404, "Dashboard projection not found")
         return row.payload
+
+    @app.post("/api/workflows/from-case/{snapshot_id}/{listing_id}",
+              dependencies=[Depends(authorize), Depends(local_command)])
+    def start_workflow(snapshot_id: str, listing_id: str, command: WorkflowRequest,
+                       session: Session = Depends(database), store: WorkflowStore = Depends(workflows)):
+        row = require_case(session, snapshot_id, listing_id)
+        if row.lifecycle == "excluded":
+            raise HTTPException(409, "Excluded case requires a separate reconsideration decision")
+        plan = research_plan(f"{snapshot_id}/{listing_id}", row.source_revision, "shadow")
+        try:
+            run_id = store.create_run(plan, command.request_key)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        return {"run_id": run_id, "mode": "shadow", "external_actions_enabled": False}
+
+    @app.get("/api/workflows/{run_id}", dependencies=[Depends(authorize)])
+    def workflow(run_id: str, after_event_id: int = Query(default=0, ge=0),
+                 limit: int = Query(default=100, ge=1, le=200), store: WorkflowStore = Depends(workflows)):
+        try:
+            return store.view(run_id, after_event_id=after_event_id, limit=limit)
+        except KeyError as error:
+            raise HTTPException(404, "Workflow not found") from error
+
+    @app.post("/api/workflows/{run_id}/cancel", dependencies=[Depends(authorize), Depends(local_command)])
+    def cancel_workflow(run_id: str, store: WorkflowStore = Depends(workflows)):
+        try:
+            return {"run_id": run_id, "cancelled": store.cancel(run_id)}
+        except KeyError as error:
+            raise HTTPException(404, "Workflow not found") from error
 
     return app

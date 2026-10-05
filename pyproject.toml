@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "verda-v2"
-version = "0.1.0"
-description = "Local Verda research backend with a read-only legacy migration boundary"
+version = "0.2.0"
+description = "Local Verda research backend with preserved history and durable workflow execution"
 requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.142.2,<1",

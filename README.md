@@ -1,6 +1,6 @@
 # Verda v2
 
-Mac üzerinde çalışan yeni araştırma motorunun ilk parçası. Mevcut GitHub Pages arayüzü korunur. Bu depo henüz tam agent uygulaması değildir.
+Mac üzerinde çalışan, kalıcı görev kuyrukları olan agent çatısı. Mevcut GitHub Pages arayüzü korunur. Genel agent döngüsü çalışır; canlı emlak araştırması için kaynak adaptörleri ve mesaj politikası henüz tamamlanmamıştır.
 
 Kod deposu: [tremo/verda](https://github.com/tremo/verda). Gerçek ilan verileri, satıcı yazışmaları, yerel raporlar ve erişim anahtarları bu depoya dahil değildir.
 
@@ -33,23 +33,123 @@ Bu çalışma sırasında doğrulanan bağımlılık sürümleri `requirements.l
 
 Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` dosyasındaki anahtarı `Authorization: Bearer ...` başlığında ister. Anahtar ve bütün yerel veriler Git dışında kalır. Sunucu dış ağa bağlanmaz; satıcı mesajı ve bulut yayını yapacak bir endpoint içermez. API yeni bir dashboard değildir.
 
-### Agent yönetim ekranı
+### Agent merkezi: görev, agent ve araç ayrı kavramlardır
 
-Sunucu çalışırken `http://127.0.0.1:8765/control` adresini açın. Bu ayrı yerel ekran mevcut ilan dashboard’ını değiştirmez. Yedi uzmanın yetkinlikleri, sınırları, agent bazında model profili, işlerin kod/adaptör/model ayrımı ve yönergeler görünür. Yönetici prompt’u gerçek öneri çağrısıyla aynı kaynaktan gelir; diğer yönergeler henüz taslaktır. Ekran salt okunurdur; prompt veya model düzenleme henüz yoktur.
+`http://127.0.0.1:8765/control` yeni agent merkezidir. Sunucunun `.local/viewer-link` dosyasına yazdığı tek kullanımlık bağlantıyı önce aynı Mac'in tarayıcısında açın. Bağlantı 10 dakika, salt okunur oturum dört saat geçerlidir. Sunucu yeniden başlatılınca yeni bağlantı gerekir. Bağlantıyı paylaşmayın. Bu oturum kuyruk yazma yetkisi vermez; yazma API'leri Bearer anahtarı ister ve browser Origin başlığını reddeder.
 
-Sahibinden bölümünde tek seçilmiş Mac tarayıcı oturumu hedefi ve başlangıç hız önerileri yer alır. Tarayıcı köprüsü, hız sınırlayıcı ve engel algılama henüz canlı kaynağa bağlanmadığı için açıkça bu durum gösterilir. 180 saniye aralık, 5 işlik grup ve 30 dakika mola, sitenin onayladığı veya engellemeyeceği sınırlar değildir. CAPTCHA/429/403/oturum değişiminde kaynak kuyruğunun durması ve otomatik engel aşma yapılmaması hedef davranıştır.
+- **Agent:** Sorumluluk alanı, yönergesi, model profili, araç yetkileri, delegasyon hedefleri ve gelen işler kuyruğu olan yürütücü. Sürekli açık bir model konuşması değildir; kayıtlı bağlamla uyanır.
+- **Görev:** Bir agent'a atanmış hedef; girdisi, önceliği, ilan ilişkisi, kaynağı ve durumu vardır. “Doğal sit kontrolü” bir görevdir.
+- **Araç:** İş yapan fonksiyon, script, kaynak adaptörü veya MCP çağrısıdır. “Doğal sit katmanını sorgula” aracı araştırma agent'ının kullanımına verilebilir.
+- **Tetikleyici:** Zaman, kullanıcı isteği, dış olay veya başka agent'ın delegasyonu; görev oluşturur. Kendisi agent değildir.
+- **İlan:** Görevlerin üzerinde çalıştığı dosyadır. Aynı ilan birçok agent'a; bir agent aynı anda birçok ilanın sıradaki görevlerine bağlı olabilir.
 
-`/control` ve `/control/catalog` yalnız uygulama tanımlarını sunar; gerçek ilan, yazışma veya erişim anahtarı içermez ve model çağırmaz. Özel veri API’leri Bearer korumasını sürdürür. Sunucu loopback üzerinde çalışır, beklenmeyen Host başlıklarını reddeder. Bu ekranı olduğu gibi internete açmak desteklenmez.
+Yeni merkezde dört başlangıç rolü vardır: ana yönetici, Sahibinden operatörü, parsel operatörü ve araştırma agent'ı. Roller Python enum'uyla sınırlandırılmaz. Yeni bir rol yapılandırmaya eklenebilir. Önceki yedi rolün kataloğu `/control/legacy-definitions`, sabit dokuz görevli örnek ve eski ilan geçmişi `/control/flows` altında tarihsel inceleme için kalır; bunlar yeni çalışma modelini temsil etmez.
 
-### İlan akışları
+Ekran agent kuyruğunu, gerçek yönergeyi, model tercihini, izinli araçları, delegasyonları, tetikleyicileri ve ilan bazında görev izini gösterir. Her görev satırında sorumlu agent vardır; araç çağrıları o görevin altında görünür. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz.
 
-`/control/flows` ekranında ilan seçimi, eski araştırma geçmişi ve varsa ilana bağlı V2 araştırmaları bulunur. Agent düğümünü seçince aldığı girdi, ürettiği sonuç, sonraki işler, bekleme nedeni, deneme sayısı ve olay geçmişi görünür. Dallanan görevler aynı grafikte gösterilir. Düz çizgi kaydedilmiş veri aktarımını, kesik çizgi yalnız plan bağımlılığını gösterir.
+## Agent çatısının mimarisi
 
-Görev sahiplenildiğinde çalışana verilen bağımlılık sonuçlarının o andaki kopyası olay kaydına yazılır. Sonradan güncel sonuçlardan geçmiş girdi uydurulmaz. Önceki sürümdeki çalışmalar ve eski araştırma arşivi bu kayıtları içermiyorsa ekran bunu açıkça belirtir. Bu görünüm işlem kayıtlarını gösterir; modelin iç düşünce sürecini göstermez. Model/prompt sürümü kaydedilmemişse bilinmiyor olarak kalır.
+```mermaid
+flowchart LR
+  U[Kullanıcı] --> I[Kalıcı görev girişi]
+  S[Zamanlayıcı] --> I
+  E[Dış olay / yanıt] --> I
+  I --> Q[Agent gelen işler kuyruğu]
+  Q --> A[Bağlamı oku ve karar ver]
+  A --> T[Yetkili araç çağrısı]
+  A --> D[Başka agent'a görev ver]
+  A --> W[Girdi bekle veya tamamla]
+  D --> I
+  T --> R[Sonucu ve işlem izini kaydet]
+  R --> Q
+  W --> P[Üst göreve sonucu bildir]
+  P --> Q
+```
 
-Gerçek geçmiş özeldir. `verda serve`, `.local/viewer-link` dosyasına yalnız dosya sahibinin okuyabildiği bir bağlantı yazar. Sunucuyu başlattıktan sonra bu bağlantıyı aynı Mac'in tarayıcısında açın: 10 dakika geçerli tek kullanımlık bağlantı, dört saatlik salt okunur oturum açar. Sonra `/control/flows` kullanılabilir. Sunucu yeniden başladığında yeni bağlantı gerekir. Bağlantıyı paylaşmayın. Tarayıcı oturumu kuyruk oluşturma, iptal veya diğer yazma işlemleri için yetki vermez; mevcut API Bearer koruması devam eder. Yanıtlar önbelleğe alınmaz.
+**Sahibinden örneği:** Sabah zamanlayıcısı tarama işini operatörün kuyruğuna verir. Yeni bulunan ilanlar için detay okuma işleri aynı operatöre gelir. Yönetici de farklı ilanlara ait konuşma veya mesaj görevleri atayabilir. Kuyruk öncelik, ardından geliş sırasını kullanır. Agent başına bir karar turu, kaynak başına bir araç çağrısı aynı anda çalışabilir. Bir kaynak beklemesi agent'ın diğer uygun işlerine geçebilmesine izin verir. Kritik bir gönderim başladıktan sonra başka bir iş için ortasında kesilmez.
 
-“Örnek V2 akışları” yalnız sentetik çalışmaları listeler. Gerçek ilana otomatik olarak demo bağlanmaz. Canlı kaynak adaptörleri henüz tamamlanmadığından gerçek ilanların eski olayları görülebilir, ancak bunlar yeni agent akışı gibi sunulmaz. Yeni bir sentetik örnek `verda demo-run --request-key example-trace` ile oluşturulabilir. Ekran Yenile düğmesiyle güncellenir; otomatik canlı takip henüz yoktur. Mevcut GitHub Pages dashboard'ı değiştirilmez.
+Yönetici sabit DAG oluşturmak zorunda değildir. Görev bağlamı, önceki araç sonuçları ve dönen alt görevlerle karar verir: araç kullan, devret, kullanıcı girdisi bekle veya tamamla. Yönetici `delegate` ile sonucu bekleyebilir veya `dispatch` ile beklemeden birden fazla görevi kuyruğa bırakabilir. Tamamlanmamış alt işler varken üst görev tamamlanamaz. Alt işler tamamlandığında üst görev tekrar kuyruğa alınır; alt görevde engel oluşursa yönetici yeniden karar vermek için uyandırılır. Bekleyen üst görev worker veya model oturumu tutmaz. Bir görev başka agent'a devredilirken girdi kopyası, üst/alt görev bağı ve ortak iz kimliği saklanır. Bir iz en fazla 100 görev; her agent görevi yapılandırılmış tur bütçesiyle sınırlıdır.
+
+Görevlerin sonucu doğrudan resmî kanıt veya uygunluk kararı sayılmaz. Alan uygulamasında belge/konum doğrulaması ve kanıt kabulü ayrıca araçlarla uygulanmalıdır. Genel çatı araştırma sırasını bilmez; bu kurallar görev yönergeleri, araç sözleşmeleri ve alan doğrulayıcılarına aittir.
+
+### Çalışan çekirdek
+
+Yeni durum `.local/agency.sqlite` dosyasındadır. Eski arşiv ve önceki workflow veritabanları aynen korunur. `agency-init` tekrar çalıştırılabilir; şema v1→v2 yükseltmesi işlemseldir. Yedeklerde üç veritabanı da bulunmalıdır.
+
+- Kalıcı gelen işler kuyruğu, öncelik, atomik sahiplenme, agent başına tek karar turu.
+- Agent bazında sağlayıcı/model, sürümlü yönerge ve araç/delegasyon izinleri. Görev oluşurken tanımın kopyası ve yapılandırma özeti saklanır; çalışırken yapılandırma değişmişse sessizce farklı yetkiyle devam etmez.
+- Codex ile gerçek karar döngüsü, dinamik görev devri, alt görev sonucuyla yöneticinin yeniden uyanması.
+- Python, sabit komutlu script ve MCP araç kaydı. MCP stdio bağlantısı yerel test sunucusuyla doğrulandı; HTTP transport kod yolu mevcut, dış servis kimlik doğrulaması henüz eklenmedi.
+- Statik görevlerde `executor_tool` doğrudan belirtilir; agent'ın kuyruğu ve araç izinleri kullanılır, **model çağrısı yapılmaz**.
+- Kaynak kilidi ve araç çağrıları arasında kalıcı minimum süre. Kaynak durdurma sinyali alan adaptör `ResourceBlocked` üretir; bağlı kuyruk durur. Gerçek tarayıcıdan CAPTCHA/429/403/oturum kaybı tespiti henüz bağlı değildir.
+- Zamanlayıcı teslimatı ve dış olay aboneliği; tekrar gelen istekler aynı anahtarla çoğaltılmaz. Kaçırılmış zaman aralıkları tek teslimata birleştirilir.
+- Girdi bekleyen göreve cevap gelince devam etme. Araç çağrısı başlamışken worker kaybolursa belirsiz durum saklanır, kaynak durur; otomatik tekrar yapılmaz.
+- İşlem açıklaması, araç girdisi/çıktısı, görev devri, model sağlayıcısı, çağrı kimliği, kullanım ve prompt sürümü olaylara yazılır. Bunlar modelin iç düşünce kaydı değildir.
+
+### Başlatma ve görev verme
+
+```bash
+.venv/bin/verda agency-init
+.venv/bin/verda agency-submit sahibinden "Atanan ilanın ayrıntısını oku" \
+  --inputs .local/listing-input.json --listing-ref LISTING_ID --request-key read-LISTING_ID-v1
+
+# Kuyruktan tek karar turu. Araç bağlı değilse açık nedenle bekler.
+.venv/bin/verda agency-worker --max-steps 1
+
+# Sürekli yerel worker ve zamanlayıcı teslimatı; terminalde Ctrl+C ile durdurulur.
+.venv/bin/verda agency-worker --continuous
+
+# Gerçek Codex; yalnız sentetik araçlar ve örnek ilan. Sabit görev planı yok.
+.venv/bin/verda agency-demo
+.venv/bin/verda agency-status
+```
+
+`agency-demo`, yöneticiye yalnız hedef verir. Yönetici operatöre devretmeyi, operatör araç çağrısını ve tamamlamayı, yönetici de sonucu nasıl özetleyeceğini modelle seçer. Sentetik araçlar ayrı kaynak adları kullanır ve canlı işleri tamamlamaz. 5 Ekim 2026 yerel doğrulamasında yönetici → Sahibinden operatörü → örnek ilan okuma aracı → operatör sonucu → yönetici sonucu zinciri **dört gerçek Codex çağrısıyla** tamamlandı. Bu Sahibinden bağlantısının çalıştığı anlamına gelmez.
+
+Salt kodla çalışan görev örneği (`.local/screen.json` içeriği `{"price_tl": 8000000, "area_m2": 2000}`):
+
+```bash
+.venv/bin/verda agency-submit research "Fiyat ve alan ön elemesi" \
+  --inputs .local/screen.json --tool policy.screen --request-key screening-example
+.venv/bin/verda agency-worker --max-steps 2
+```
+
+API'den görev girişi `POST /api/agency/tasks`, olay girişi `POST /api/agency/events`, kullanıcı cevabı `POST /api/agency/tasks/{id}/reply` yollarındadır. İlk ikisi tekrar üretmeyi önlemek için istek anahtarı alır. Başka bir uygulama veya MCP sunucusu bu yetkili girişleri çağırabilir; Verda'nın kendi MCP **sunucusu** henüz yoktur. Verda'nın MCP **istemcisi** araç tüketmek için uygulanmıştır.
+
+### Yeni agent, script veya MCP aracı ekleme
+
+Başlangıç tanımları `src/verda/agency/default.json` dosyasındadır. Yerel kopyayı düzenleyip `--agency-config .local/agency.json` parametresini komuttan önce verin. Araç eklemek onu bütün agent'lara açmaz; ilgili agent'ın `tools` listesine de eklemek gerekir. Modelin yazdığı komut veya sunucu adresi çalıştırılmaz; bunlar yalnız güvenilen yerel yapılandırmadan gelir.
+
+Bir agent kaydı `key`, `label`, `description`, `prompt`, `version`, `model`, `tools`, `delegates`, `max_turns` içerir. Model profili `provider`, `model`, `timeout_seconds` alanlarıdır. Yeni sağlayıcı aynı `ModelProvider.generate` arayüzüyle engine'e kaydedilir; başka firma adını yazmak adaptörü kendiliğinden kurmaz. Şu anda Codex uygulanmıştır.
+
+Script araç kaydı örneği:
+
+```json
+{
+  "key": "local.measure",
+  "label": "Yerel ölçüm",
+  "description": "Kayıtlı ölçümü hesaplar",
+  "transport": "script",
+  "command": ["/absolute/path/to/python", "/absolute/path/to/measure.py"],
+  "input_schema": {"type": "object", "properties": {"value": {"type": "number"}}, "required": ["value"], "additionalProperties": false}
+}
+```
+
+Script JSON girdisini stdin'den okur, JSON çıktısını stdout'a yazar. Shell açılmaz. Script sandbox'ı yoktur; yapılandırılan script güvenilen yerel kod olmalıdır. Python fonksiyonları `Registry(config, handlers={"tool.key": callable})` ile bağlanır.
+
+MCP araç kaydında `transport: "mcp"`, `remote_name`, `server_url` **veya** stdio `command` tanımlanır. Girdi şeması ve agent yetkisi yerelde açıkça tanımlanır. Sunucunun sunduğu diğer araçlar veya yönergeler kendiliğinden içeri alınmaz. SDK: [resmî MCP istemci belgeleri](https://py.sdk.modelcontextprotocol.io/client/).
+
+Zamanlayıcı JSON kaydı `key`, `kind: "timer"`, `next_at` (UTC Unix zamanı), `spec: {agent, objective, inputs, interval_seconds, priority}` içerir. Günlük kullanım için başlangıç zamanı açıkça hesaplanır ve aralık 86400 saniyedir; saat dilimli genel cron takvimi henüz yoktur. Olay kaydı `kind: "event"`, `spec.event_type` ve aynı görev hedefini içerir. Kayıt için `agency-trigger FILE`, dış olay teslimi için `agency-event EVENT_TYPE FILE --request-key KEY` kullanılır. Zamanlayıcı yalnız worker çalışırken teslim edilir; Mac kapalıyken bulut yürütme yoktur.
+
+### Açık kalan alan işleri
+
+Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Seçilmiş Chrome oturumu, Sahibinden/TKGM bağlantıları, gerçek kanıt kabulü, ortak ilan bilgi deposuna yeni gözlem yazan araçlar, mesaj kurallarının uygulanması ve teslimat uzlaştırması, genel cron/saat dilimi desteği, kontrol panelinden düzenleme/başlatma ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrıların yeniden denenmesi ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
+
+Sahibinden için 180 saniye **araç çağrısı** aralığı tanımlıdır; bir araç birden çok site isteği yapıyorsa alt tarayıcı katmanı da bunları sınırlamalıdır. Bu sitenin izin verdiği veya engellemeyeceği bir sınır değildir. Önceki 5 işlik grup/30 dakika mola önerisi henüz uygulanmamıştır.
+
+### Eski ilan geçmişi ve sabit plan
+
+`/control/flows` eski ilanların korunmuş olaylarını ve önceki sabit görev örneklerini sunar. Eksik agent/prompt/girdi kaydı geriye dönük üretilmez. Gerçek ilana demo bağlanmaz. Bu ekranla yeni agent merkezinin görev kayıtları ayrı tutulur. Mevcut GitHub Pages dashboard'ı değiştirilmez.
 
 Başlıca okumalar:
 
@@ -67,7 +167,7 @@ Gölge aktarımdaki `migration_review` bir araştırma sonucu değil, yeni yür�
 
 SQLite bu ilk aşamanın yerel geliştirme deposudur. PostgreSQL bağlantısı SQLAlchemy üzerinden hazırdır; canlı çoklu worker aşamasında PostgreSQL/PostGIS, sürümlü şema migrasyonları ve gerçek eşzamanlılık testleri eklenecek. PostgreSQL/PostGIS işletimi bu ilk teslimatta doğrulanmış değildir. `init` yalnız boş v1 şemayı kurar; sonraki şema yükseltmeleri için migration gerekir.
 
-## Kalıcı görev motoru
+## Önceki sabit görev motoru (korunan örnek)
 
 Eski verinin arşivi `.local/verda.sqlite`, yeni görev kuyruğu `.local/workflows.sqlite` içinde tutulur. `verda init` iki veritabanını kurar; aynı komut tekrar çalıştırılabilir. Eski görevler otomatik olarak yeni kuyruğa aktarılmaz. İki veritabanını aynı dosyaya yönlendirmeyin; şema kontrolü bunun kabul edilmesini engeller. Yedekte her iki dosya da yer almalıdır.
 
@@ -79,7 +179,7 @@ Standart araştırma sırası:
   → değerlendirme
 ```
 
-Bu sırayı şu anda kurallı planlayıcı oluşturur. Codex ile yönetici önerisi ayrı olarak çalışır; öneriyi otomatik kabul eden bir agent döngüsü henüz eklenmedi. Plan dışı yetkiler, döngüsel bağımlılıklar ve parsel adımı olmadan mekânsal kontrol isteyen planlar reddedilir. Gerçek araştırmanın ucuz ön eleme, eksik kimlik sorusu, yanıt bekleme ve kanıt kabul dalları bu sabit örnek plana henüz eklenmedi.
+Bu eski örneğin sırasını kurallı planlayıcı oluşturur. Yeni agent çekirdeği bu planı kullanmaz; yukarıda açıklanan dinamik karar/delegasyon döngüsünü kullanır. Plan dışı yetkiler, döngüsel bağımlılıklar ve parsel adımı olmadan mekânsal kontrol isteyen planlar reddedilir. Gerçek araştırmanın ucuz ön eleme, eksik kimlik sorusu, yanıt bekleme ve kanıt kabul dalları bu sabit örnek plana henüz eklenmedi.
 
 Sentetik senaryoyu çalıştırmak için:
 
@@ -113,7 +213,9 @@ Yerel yürütme özellikleri:
 
 Bu kuyruğun PostgreSQL uygulaması henüz yok; yerel eşzamanlılık testleri SQLite üzerinde çalışır. Süreli sahiplik veritabanına sonuç kabulünü korur; daha önce başlamış harici tarayıcı işlemini fiziksel olarak durdurma garantisi vermez. Canlı adaptörlerden önce tek tarayıcı yöneticisi, kanıt doğrulayıcı ve gönderimler için ayrı teslimat uzlaştırması eklenmelidir. Bu sürümde gönderim aracı bulunmaz.
 
-## Codex, diğer sağlayıcılar ve modelsiz işler
+## Önceki tek çağrılık model katmanı
+
+Bu bölüm korunan `runtime-info` ve `manager-demo` komutlarını açıklar. Yeni `agency-*` komutlarının model, prompt ve araç ayarları yukarıdaki JSON agent tanımlarındadır. İki katman aynı Codex sağlayıcı arayüzünü kullanır.
 
 Bir uzmanlık rolü sürekli çalışan bir model oturumu değildir. Yürütme türü her işlem için ayrı tanımlanır:
 
@@ -199,4 +301,4 @@ Bu çıktı özel veridir; Pages deposuna doğrudan eklenmez. Export mevcut dosy
 
 Testler sentetik SQLite, geçici dosyalar ve yerel HTTP istemcisi kullanır. Kaynak değişmezliği, tekrar aktarım, geçmişin ve mesaj durumlarının korunması, yetkisiz erişim, politika eşikleri ve dashboard alanlarının kaybolmaması kontrol edilir. Görev motorunda eşzamanlı sahiplenme, süre aşımı, yeniden başlama, deneme sınırı, bağımlılıklar, iptal ve örnek/gerçek iş ayrımı ayrıca test edilir.
 
-Agent kataloğu bu sürümde yetenek sözleşmesidir. Kalıcı görev yürütücüsü, sentetik worker, Codex ile tek çağrılık yönetici önerisi ve sağlayıcı yönlendirmesi çalışır. Tam model/araç döngüsü, Sahibinden/TKGM adaptörleri, gerçek kanıt kabulü, canlı gönderici ve otomatik Firestore yayını sonraki parçalardır. Hazır oldukları iddia edilmez.
+Yeni agent döngüsü, dinamik delegasyon, kalıcı gelen işler, model kullanmayan görevler, kaynak sıralaması, olay/zamanlayıcı girişi ve script/MCP araçları ayrıca test edilir. Canlı kaynak adaptörleri, kanıt kabulü, mesaj politikası ve otomatik Firestore yayını henüz tamamlanmamıştır.

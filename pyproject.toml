@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "verda-v2"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local Verda research backend with preserved history and durable workflow execution"
 requires-python = ">=3.13"
 dependencies = [
@@ -12,6 +12,8 @@ dependencies = [
   "pydantic>=2.13.5,<3",
   "sqlalchemy>=2.0.54,<2.1",
   "uvicorn>=0.54.0,<1",
+  "jsonschema>=4.23,<5",
+  "mcp>=2,<3",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +27,7 @@ verda = "verda.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-verda = ["ui/*.html", "ui/*.css", "ui/*.js"]
+verda = ["ui/*.html", "ui/*.css", "ui/*.js", "agency/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -25,11 +25,30 @@ class WorkflowRequest(BaseModel):
     request_key: str = Field(min_length=1, max_length=128, pattern=r"\S")
 
 
+
+class AgentTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    agent: str
+    objective: str = Field(min_length=1, max_length=4000)
+    inputs: dict = Field(default_factory=dict)
+    request_key: str = Field(min_length=1, max_length=256)
+    listing_ref: str | None = Field(default=None, max_length=256)
+    executor_tool: str | None = None
+    priority: int = Field(default=50, ge=0, le=100)
+
+
+class AgentEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event_type: str = Field(min_length=1, max_length=128)
+    request_key: str = Field(min_length=1, max_length=128)
+    payload: dict
+
+
 def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None, runtime=None,
-               viewer_nonce: str | None = None) -> FastAPI:
+               viewer_nonce: str | None = None, agency_store=None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("An API token of at least 32 characters is required")
-    app = FastAPI(title="Verda v2 — shadow backend", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Verda v2 — shadow backend", version="0.4.0", docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
     assets = Path(__file__).parent / "ui"
     app.mount("/control/assets", StaticFiles(directory=assets), name="control-assets")
@@ -69,7 +88,23 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
 
     @app.get("/control")
     def control_page():
-        return FileResponse(assets / "index.html", headers={"Cache-Control": "no-store"})
+        return FileResponse(assets / "agency.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/legacy-definitions")
+    def old_definitions():
+        return FileResponse(assets / "index.html")
+
+    @app.get("/control/private/agency", dependencies=[Depends(viewer)])
+    def agency_view(listing_ref: str | None = None, trace_id: str | None = None):
+        if agency_store is None:
+            raise HTTPException(503, "Agent inbox storage is not configured")
+        from verda.agency.engine import default_registry, PROTOCOL
+        registry = default_registry(agency_store.config)
+        return {**agency_store.overview(listing_ref=listing_ref, trace_id=trace_id),
+                "agents": [a.model_dump() for a in agency_store.config.agents],
+                "tools": [{**t.model_dump(exclude={"command", "server_url"}), "connected": registry.available(t.key)}
+                          for t in agency_store.config.tools],
+                "live_source_adapters": False, "protocol_prompt": PROTOCOL}
 
     @app.get("/control/catalog")
     def control_data():
@@ -147,6 +182,33 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
             return store.view(run_id, after_event_id=after_id, limit=100)
         except KeyError as error:
             raise HTTPException(404, "Workflow not found") from error
+
+    def agency():
+        if agency_store is None:
+            raise HTTPException(503, "Agent inbox storage is not configured")
+        return agency_store
+
+    @app.post("/api/agency/tasks", dependencies=[Depends(authorize), Depends(local_command)])
+    def submit_agent_task(command: AgentTaskRequest):
+        try:
+            return {"task_id": agency().submit(**command.model_dump()), "state": "queued"}
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/api/agency/events", dependencies=[Depends(authorize), Depends(local_command)])
+    def publish_agent_event(command: AgentEventRequest):
+        try:
+            return {"tasks": agency().publish(command.request_key, command.event_type, command.payload)}
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @app.post("/api/agency/tasks/{task_id}/reply", dependencies=[Depends(authorize), Depends(local_command)])
+    def reply_to_agent(task_id: str, reply: dict):
+        try:
+            agency().resume(task_id, reply)
+            return {"task_id": task_id, "state": "queued"}
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
 
     @app.get("/health")
     def health():

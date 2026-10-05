@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import secrets
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
@@ -19,10 +23,24 @@ class WorkflowRequest(BaseModel):
     request_key: str = Field(min_length=1, max_length=128, pattern=r"\S")
 
 
-def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None) -> FastAPI:
+def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None, runtime=None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("An API token of at least 32 characters is required")
     app = FastAPI(title="Verda v2 — shadow backend", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+    assets = Path(__file__).parent / "ui"
+    app.mount("/control/assets", StaticFiles(directory=assets), name="control-assets")
+
+    @app.get("/control")
+    def control_page():
+        return FileResponse(assets / "index.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/catalog")
+    def control_data():
+        # Read-only definitions only. No listing data, credentials or model calls.
+        from verda.control import control_catalog
+        from verda.runtime import Runtime
+        return control_catalog(runtime or Runtime())
 
     def authorize(authorization: str | None = Header(default=None)):
         expected = "Bearer " + token

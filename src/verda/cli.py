@@ -105,7 +105,9 @@ def main():
             args.token_file.chmod(0o600)
             if not workflow_store.path.exists():
                 raise ValueError("Run verda init before serving workflows")
-            uvicorn.run(create_app(engine, token, workflow_store), host="127.0.0.1", port=args.port,
+            from verda.runtime import Runtime, RuntimeConfig
+            runtime = Runtime(RuntimeConfig.load(args.runtime_config))
+            uvicorn.run(create_app(engine, token, workflow_store, runtime), host="127.0.0.1", port=args.port,
                         access_log=False, log_level="warning")
             return
         print(json.dumps(result, ensure_ascii=False, indent=2))

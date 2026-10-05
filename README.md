@@ -33,6 +33,14 @@ Bu çalışma sırasında doğrulanan bağımlılık sürümleri `requirements.l
 
 Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` dosyasındaki anahtarı `Authorization: Bearer ...` başlığında ister. Anahtar ve bütün yerel veriler Git dışında kalır. Sunucu dış ağa bağlanmaz; satıcı mesajı ve bulut yayını yapacak bir endpoint içermez. API yeni bir dashboard değildir.
 
+### Agent yönetim ekranı
+
+Sunucu çalışırken `http://127.0.0.1:8765/control` adresini açın. Bu ayrı yerel ekran mevcut ilan dashboard’ını değiştirmez. Yedi uzmanın yetkinlikleri, sınırları, agent bazında model profili, işlerin kod/adaptör/model ayrımı ve yönergeler görünür. Yönetici prompt’u gerçek öneri çağrısıyla aynı kaynaktan gelir; diğer yönergeler henüz taslaktır. Ekran salt okunurdur; prompt veya model düzenleme henüz yoktur.
+
+Sahibinden bölümünde tek seçilmiş Mac tarayıcı oturumu hedefi ve başlangıç hız önerileri yer alır. Tarayıcı köprüsü, hız sınırlayıcı ve engel algılama henüz canlı kaynağa bağlanmadığı için açıkça bu durum gösterilir. 180 saniye aralık, 5 işlik grup ve 30 dakika mola, sitenin onayladığı veya engellemeyeceği sınırlar değildir. CAPTCHA/429/403/oturum değişiminde kaynak kuyruğunun durması ve otomatik engel aşma yapılmaması hedef davranıştır.
+
+`/control` ve `/control/catalog` yalnız uygulama tanımlarını sunar; gerçek ilan, yazışma veya erişim anahtarı içermez ve model çağırmaz. Özel veri API’leri Bearer korumasını sürdürür. Sunucu loopback üzerinde çalışır, beklenmeyen Host başlıklarını reddeder. Bu ekranı olduğu gibi internete açmak desteklenmez.
+
 Başlıca okumalar:
 
 ```text

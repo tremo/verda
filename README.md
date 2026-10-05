@@ -47,6 +47,51 @@ Yeni merkezde dört başlangıç rolü vardır: ana yönetici, Sahibinden operat
 
 Ekran agent kuyruğunu, gerçek yönergeyi, model tercihini, izinli araçları, delegasyonları, tetikleyicileri ve ilan bazında görev izini gösterir. Her görev satırında sorumlu agent vardır; araç çağrıları o görevin altında görünür. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz.
 
+## Ürün hedefi: n8n tarzı görsel otomasyon stüdyosu
+
+Kullanıcının 5 Ekim 2026 yönlendirmesiyle ürünün ana yüzeyi **görsel akış editörü** olarak tanımlandı. Tuvalde düğümler eklenir, bağlanır ve ayarlanır; aynı tuval bir çalışma seçildiğinde yürütme izini gösterir. n8n burada etkileşim ve bileşen modeli için referanstır; n8n'i kurma veya mevcut uygulamayı ona taşıma kararı verilmiş değildir. Referans: [n8n kavramları](https://docs.n8n.io/key-concept-glossary.md), [akış oluşturma](https://docs.n8n.io/build-your-first-workflow.md).
+
+**Bu bölüm hedef tasarımdır.** Mevcut agent merkezi salt okunur kayıt ekranıdır; aşağıdaki görsel editör, akış tanımı çalıştırıcısı ve düzenleme işlemleri henüz uygulanmadı. Agent kuyrukları, model döngüsü, araç kayıtları ve olay geçmişi bu katmanın altında kullanılacak mevcut çekirdektir.
+
+### Görsel bileşenler
+
+| Düğüm türü | İşlevi | Model gerekir mi? |
+|---|---|---|
+| Tetikleyici | Zaman, kullanıcı, webhook veya olayla akış başlatır | Hayır |
+| Agent'a görev ver | Kayıtlı agent'ın kuyruğuna hedef ve girdi gönderir; sonucu bekleyebilir veya görev kimliğini hemen döndürebilir | Göreve göre |
+| Araç / MCP | Yetkili bir aracı açık girdilerle çağırır | Hayır |
+| Script / hesap | Kayıtlı kodu çalıştırır | Hayır |
+| Koşul / filtre | Veriyi kurallarla dallara ayırır | Hayır |
+| Her kayıt için / birleştir | İlanları tek tek işler, paralel sonuçları toplar | Hayır |
+| Bekle / kullanıcı girdisi | Yanıt, süre veya insan kararı gelene kadar kalıcı olarak duraklar | Hayır |
+| Alt akış | Yeniden kullanılabilir bir akışı çağırır | İçeriğine göre |
+| Kaydet / bildir | Doğrulanmış sonucu veri katmanına yazar veya tanımlı bildirimi üretir | Hayır |
+
+Agent kutusu yeni bir agent kopyası oluşturmaz; kayıtlı agent kimliğine referanstır. Sabah taraması, ilan detayı toplama ve yönetici mesajları üç ayrı akış olsa da hepsi aynı Sahibinden operatörünün kuyruğuna bağlanır. Aynı tarayıcı ve hesap için hız sınırı bütün akışlarda ortaktır. Araç, akıştan doğrudan çağrılsa da aynı yetki ve kaynak kontrollerinden geçer.
+
+Akış bağlantısı **veri/çalışma sırasını**, agent'ın araç bağlantısı ise **kullanma yetkisini** ifade eder. Editör bunları farklı gösterir. Bir aracı agent'a bağlamak her görevde otomatik çağrılacağı anlamına gelmez. Agent'ın çalışma sırasında seçtiği araç ve delegasyonlar yürütme görünümünde açılır; tasarım tuvaline sabit adımlar gibi eklenmez.
+
+### İki görünüm, aynı akış
+
+- **Tasarım:** Solda düğüm kataloğu, ortada tuval, sağda seçili düğümün ayarları. Agent düğümünde seçilen agent, hedef, girdi eşlemesi ve bekleme davranışı bulunur. Agent'ın ortak prompt/model/araç ayarlarına ayrıca gidilir.
+- **Çalıştırma:** Seçilen çalışmanın gerçek düğüm durumları, giriş/çıkış verileri, süreler, hata ve bekleme nedenleri aynı tuvale bindirilir. Agent adımı açılınca kararlar, araç çağrıları ve alt görevler görünür.
+
+Bir ilan birden çok akıştan geçmiş olabilir. İlan dosyası hepsini tek zaman çizelgesinde toplar; buradan ilgili akış çalışmasına ve düğüme geçilir. Tasarım ile çalışmış geçmiş birbirine karıştırılmaz.
+
+### Kalıcı akış sözleşmesi
+
+Görsel editörün kaynak kaydı sürümlü bir `FlowDefinition` olacak: düğümler, düğüm türü ve sürümü, ayarlar, tipli giriş/çıkışlar, veri eşlemeleri, bağlantılar ve tuval konumları. UI çizimi bu kaydı düzenleyecek. Bağlantı bilgilerinin kendisi tanımda tutulmaz; yetkili yerel bağlantı kayıtlarına referans verilir.
+
+Her çalıştırma bir `FlowRun` oluşturur ve yayımlanmış tanım sürümünü sabitler. Düğüm denemeleri `NodeRun` olarak kaydedilir. Agent düğümü mevcut gelen işler kuyruğunda bir görev açar; `flow_run_id`, `node_run_id`, `task_id`, `tool_call_id` ve `listing_ref` birlikte izlenir. Sonuç, ilgili bekleyen düğümü uyandırır. Worker veya tarayıcı oturumu bekleme boyunca açık tutulmak zorunda değildir.
+
+Taslak düzenleme çalışan akışı değiştirmez. Test çalışması ile etkin zamanlanmış çalışma ayrı tutulur. Yerel kaydedilmiş örnek çıktı üzerinden düğüm testi yapılabilmesi, Sahibinden'e geliştirme sırasında gereksiz tekrar isteklerini azaltır. Tek düğümü yeniden çalıştırma, mesaj gibi dış etkileri körlemesine tekrarlamaz; kayıtlı teslimat durumunu kontrol eder.
+
+### İlk uçtan uca editör kabulü
+
+İlk dikey parça: **Elle başlat → agent'a görev ver → sonucu kaydet** akışını tuvalden oluştur, kaydet, yeniden aç ve sentetik araçlarla gerçek model döngüsünde çalıştır. Aynı agent'ı ikinci akıştan çağırıp ortak kuyruğu göster. Bir düğüm seçildiğinde o çalışmanın gerçek girdisini, araç çağrısını ve sonucunu göster. Sonraki düğüm türleri bu kayıt/çalıştırma sözleşmesine eklenir; her yeni düğüm için uygulama baştan yazılmaz.
+
+Mevcut GitHub Pages ilan dashboard'ı korunur. Bu editör ayrı yerel yönetim yüzeyidir. Datça araştırması onun ilk uygulamasıdır; agent ve araç ekleyebilme temel ürün özelliğidir.
+
 ## Agent çatısının mimarisi
 
 ```mermaid

@@ -45,7 +45,13 @@ Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` d
 
 Yeni merkezde dört başlangıç rolü vardır: ana yönetici, Sahibinden operatörü, parsel operatörü ve araştırma agent'ı. Roller Python enum'uyla sınırlandırılmaz. Yeni bir rol yapılandırmaya eklenebilir. Önceki yedi rolün kataloğu `/control/legacy-definitions`, sabit dokuz görevli örnek ve eski ilan geçmişi `/control/flows` altında tarihsel inceleme için kalır; bunlar yeni çalışma modelini temsil etmez.
 
-Ekranda seçilen agent, izinli araç bağlantıları ve görev kuyruğu birlikte görünür. Araç kartı yerel Python kodunu, scripti, MCP kaydını ve henüz bağlanmamış adaptörü ayırır; yapılandırılmış bir script/MCP bağlantısı doğrulanmış gibi gösterilmez. Browser oturumunun durumu, paylaşılan kaynak, istek aralığı ve yazma politikası da görünür. Çizgiler araç yetkisini gösterir; bu görünüm düzenlenebilir akış tuvali değildir.
+Ana görünüm **Akış tuvali**dir. Bağlantı haritası kayıtlı tetikleyicileri, agent'ları, araçları ve paylaşılan kaynakları aynı tuvalde gösterir. Zamanlayıcı→agent, yönetici→operatör, agent→araç ve araç→kaynak bağlantıları farklı çizgilerle ayrılır. Bir aracı birden fazla agent kullanıyorsa tek araç düğümüne bağlanırlar. Agent düğümüne tıklanınca kalıcı prompt, model, araçlar, tetikleyiciler, görev devri yetkileri ve gelen işler sağ panelde açılır.
+
+Zamanlayıcı düğümü kayıtlı saati (Europe/Istanbul), tekrar aralığını, etkin/pasif durumunu, hedef agent'a gönderilen görev metnini, girdiyi, önceliği ve oluşmuş görevleri gösterir. Sabit tekrar aralığı çalışma süresi değildir: mevcut çekirdekte toplam görev süresi sınırı yoktur; agent'ın karar turu ve tek model çağrısı sınırları ayrıca gösterilir. Doğrudan statik araç işi oluşturan tetikleyicide model çağrısı olmadığı belirtilir. Olay tetikleyicisi olay türünü ve gerçek girdi kaynağını gösterir.
+
+**Çalışma izi** seçeneği aynı tuvalde seçilen izin görevlerini, gerçekleşmiş devirleri, araç çağrılarını ve kaydedilmiş sonuç dönüşlerini çizer. Görev ve çağrı düğümleri verilen girdiyi ve kaydedilmiş çıktıyı açar. Tanımlı bir yetki gerçekleşmiş işlem olarak gösterilmez. Yakınlaştırma, sığdırma, tuvali ve düğümleri sürükleme vardır; konumlar yalnız mevcut sayfa oturumundadır. Bu teslimat inceleme tuvalidir: bağlantı kurma/silme, prompt veya zamanlama değiştirme ve görev başlatma henüz yoktur.
+
+Araç kartı yerel Python kodunu, scripti, MCP kaydını ve henüz bağlanmamış adaptörü ayırır; yapılandırılmış bir script/MCP bağlantısı doğrulanmış gibi gösterilmez. Browser oturumunun durumu, paylaşılan kaynak, istek aralığı ve yazma politikası da görünür. Eski agent listesi ve kayıt sekmeleri ayrıntılı liste görünümü olarak korunur.
 
 Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicileri ve ilan bazında görev izi ayrı sekmelerde incelenebilir. Kuyruk bekleyen/çalışan ve tamamlanan işleri ayırır; her işin kaynağı, önceliği, girdisi, sonucu ve araç çağrıları görünür. Doğrudan statik araçla yürütülen görev “Model kullanmaz” olarak işaretlenir. Toplam sayaçlar bütün görevleri kapsar; listede son 200 görev, olaylarda son 1.000 kayıt sınırı ve kesilme uyarısı vardır.
 
@@ -55,7 +61,7 @@ Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicile
 
 Kullanıcının 5 Ekim 2026 yönlendirmesiyle ürünün ana yüzeyi **görsel akış editörü** olarak tanımlandı. Tuvalde düğümler eklenir, bağlanır ve ayarlanır; aynı tuval bir çalışma seçildiğinde yürütme izini gösterir. n8n burada etkileşim ve bileşen modeli için referanstır; n8n'i kurma veya mevcut uygulamayı ona taşıma kararı verilmiş değildir. Referans: [n8n kavramları](https://docs.n8n.io/key-concept-glossary.md), [akış oluşturma](https://docs.n8n.io/build-your-first-workflow.md).
 
-**Bu bölüm hedef tasarımdır.** Mevcut agent merkezi salt okunur kayıt ekranıdır; aşağıdaki görsel editör, akış tanımı çalıştırıcısı ve düzenleme işlemleri henüz uygulanmadı. Agent kuyrukları, model döngüsü, araç kayıtları ve olay geçmişi bu katmanın altında kullanılacak mevcut çekirdektir.
+**Bu bölüm hedef tasarımdır.** Mevcut agent merkezi bağlantı haritası ve çalışma izi gösteren bir inceleme tuvalidir. Aşağıdaki akış tanımlarını düzenleme/yayımlama, akış tanımı çalıştırıcısı ve düğüm ekleme/bağlama işlemleri henüz uygulanmadı. Agent kuyrukları, model döngüsü, araç kayıtları ve olay geçmişi bu katmanın altında kullanılacak mevcut çekirdektir.
 
 ### Görsel bileşenler
 
@@ -346,6 +352,7 @@ Bu çıktı özel veridir; Pages deposuna doğrudan eklenmez. Export mevcut dosy
 
 ```bash
 .venv/bin/pytest -q
+node --test tests/graph-model.test.cjs
 ```
 
 Testler sentetik SQLite, geçici dosyalar ve yerel HTTP istemcisi kullanır. Kaynak değişmezliği, tekrar aktarım, geçmişin ve mesaj durumlarının korunması, yetkisiz erişim, politika eşikleri ve dashboard alanlarının kaybolmaması kontrol edilir. Görev motorunda eşzamanlı sahiplenme, süre aşımı, yeniden başlama, deneme sınırı, bağımlılıklar, iptal ve örnek/gerçek iş ayrımı ayrıca test edilir.

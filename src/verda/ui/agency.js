@@ -5,7 +5,7 @@ const e = (tag, text, cls) => {
   if (cls) n.className = cls;
   return n;
 };
-let data, view = 'agents', selected = 'sahibinden', tab = 'overview', taskId = null, toolId = null, listing = '', queueFilter = 'open';
+let data, view = 'studio', selected = 'sahibinden', tab = 'overview', taskId = null, toolId = null, listing = '', queueFilter = 'open';
 const terminal = new Set(['complete', 'cancelled', 'failed']);
 const states = {queued:'Sırada', running:'Çalışıyor', complete:'Tamamlandı', blocked:'Engel / bağlantı bekliyor', waiting_children:'Alt görev sonucu bekliyor', waiting_user:'Kullanıcı girdisi bekliyor', uncertain:'Sonuç belirsiz · tekrar yok', failed:'Başarısız', cancelled:'İptal'};
 const kinds = {task_submitted:'Görev kuyruğa alındı', turn_started:'Agent görevi aldı', decision:'Bir sonraki işlem seçildi', delegated:'Başka agent’a görev verildi', tool_started:'Araç çağrıldı', tool_finished:'Araç sonucu alındı', tool_deferred:'Kaynak sırası bekleniyor', task_complete:'Görev tamamlandı', child_result_received:'Alt görev sonucu geldi', child_needs_attention:'Alt görevde engel var', task_blocked:'Görev durdu', task_waiting_user:'Kullanıcı girdisi gerekiyor', resumed:'Kullanıcı girdisiyle devam etti', worker_lost:'Çalışan kesildi'};
@@ -179,12 +179,15 @@ function renderTrace(root) {
   layout.append(list, taskDetail(data.tasks.find(t => t.id === taskId))); root.append(layout);
 }
 function render() {
+  studioCleanup();
+  document.body.classList.toggle('studio-view', view === 'studio');
   runtimeStatus(); const nav = $('views'); nav.replaceChildren();
-  [['agents','Agent’lar'], ['trace','İlan / görev izi'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
+  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
     const b = e('button', label, 'tab' + (view === key ? ' selected' : '')); b.onclick = () => { view = key; taskId = null; render(); }; nav.append(b);
   });
   const root = $('content'); root.replaceChildren();
   if (data.tasks_truncated) root.append(e('p', 'Son 200 görev gösteriliyor. Agent sayaçları tüm kayıtları kapsar; eski görevler veritabanında korunuyor.', 'empty'));
+  if (view === 'studio') renderStudio(root);
   if (view === 'agents') renderAgents(root);
   if (view === 'trace') renderTrace(root);
   if (view === 'tools') {
@@ -193,9 +196,7 @@ function render() {
     const grid = e('div', undefined, 'tool-grid'); data.tools.forEach(t => grid.append(toolDetail(t))); root.append(grid);
   }
   if (view === 'triggers') {
-    const n = card('Agent’a iş getiren kaynaklar'); n.append(e('p', 'Tetikleyici görev oluşturur. Yürütücü kapalıysa görev işlenmez.'));
-    data.triggers.forEach(t => { const row = e('div', undefined, 'lineage'); row.append(e('h3', t.key), chips([t.enabled ? 'Etkin' : 'Pasif', t.spec.mode === 'synthetic' ? 'Örnek veri' : 'Yerel']), e('p', (t.kind === 'timer' ? 'Zamanlayıcı' : 'Olay: ' + t.spec.event_type) + ' → ' + agent(t.spec.agent)), e('p', t.spec.objective)); if (t.next_at && t.enabled) row.append(e('p', 'Sonraki zaman: ' + stamp(t.next_at), 'muted')); n.append(row); });
-    if (!data.triggers.length) n.append(e('p', 'Kayıtlı tetikleyici yok.', 'empty')); root.append(n);
+    renderTriggerCatalog(root);
   }
 }
 $('refresh').onclick = load; load();

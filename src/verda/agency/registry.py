@@ -34,7 +34,7 @@ class ToolDefinition(BaseModel):
     key: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")
     label: str
     description: str
-    transport: Literal["python", "script", "mcp", "unconnected"] = "unconnected"
+    transport: Literal["python", "script", "mcp", "browser", "unconnected"] = "unconnected"
     effect: Literal["read", "write"] = "read"
     resource: str | None = None
     min_interval_seconds: int = Field(default=0, ge=0, le=86400)
@@ -62,6 +62,8 @@ class AgencyConfig(BaseModel):
                 raise ValueError("Unknown tool or delegation target")
         for t in self.tools:
             Draft202012Validator.check_schema(t.input_schema)
+            if t.transport == 'browser' and (t.effect != 'read' or t.key not in {'sahibinden.search', 'sahibinden.read_listing'}):
+                raise ValueError('Browser bridge only supports registered Sahibinden reads')
             if t.effect == "write" and not t.resource:
                 raise ValueError("Write tools need a serialized resource")
             if t.transport == "script" and not t.command:
@@ -93,26 +95,29 @@ class TransientToolError(RuntimeError):
 
 
 class Registry:
-    def __init__(self, config: AgencyConfig, handlers: dict[str, Callable] | None = None):
+    def __init__(self, config: AgencyConfig, handlers: dict[str, Callable] | None = None, context_handlers: dict[str, Callable] | None = None):
         self.config = config
         self.agents = {a.key: a for a in config.agents}
         self.tools = {t.key: t for t in config.tools}
         self.handlers = dict(handlers or {})
-        if set(self.handlers) - self.tools.keys():
+        self.context_handlers = dict(context_handlers or {})
+        if (set(self.handlers) | set(self.context_handlers)) - self.tools.keys():
             raise ValueError("Handler without tool definition")
 
     def available(self, key):
         tool = self.tools[key]
-        return key in self.handlers or tool.transport in {"script", "mcp"}
+        return key in self.handlers or key in self.context_handlers or tool.transport in {"script", "mcp", "browser"}
 
     def validate(self, agent, key, arguments):
         if key not in self.agents[agent].tools:
             raise ValueError("tool_not_granted")
         Draft202012Validator(self.tools[key].input_schema).validate(arguments)
 
-    def call(self, key, arguments):
+    def call(self, key, arguments, *, context=None):
         tool = self.tools[key]
-        if key in self.handlers:
+        if key in self.context_handlers:
+            result = self.context_handlers[key](arguments, context)
+        elif key in self.handlers:
             result = self.handlers[key](arguments)
         elif tool.transport == "script":
             # Fixed argv, no shell, JSON over stdin. Scripts remain trusted local code.

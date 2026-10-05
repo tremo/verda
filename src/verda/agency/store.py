@@ -12,6 +12,7 @@ from verda.legacy import canonical, digest
 from verda.agency.registry import AgencyConfig
 from verda.agency.records import RecordService, OUTCOME_STATES
 from verda.agency.events import EventBus, migrate_v5, DELIVERY_DELAYS, READ_DELAYS
+from verda.agency.settings import migrate_v6, effective_agent
 
 TERMINAL = {'complete', 'cancelled', 'failed'}
 
@@ -45,7 +46,7 @@ class AgencyStore:
         with self.transaction() as con:
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if tables:
-                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3, 4, 5}:
+                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3, 4, 5, 6}:
                     raise ValueError('Foreign agency database')
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 1:
                     con.execute('ALTER TABLE inbox ADD COLUMN executor_tool TEXT')
@@ -60,6 +61,8 @@ class AgencyStore:
                     con.execute('UPDATE agency_meta SET version=4')
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 4:
                     migrate_v5(con)
+                if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 5:
+                    migrate_v6(con)
                 return
             for sql in [
                 'CREATE TABLE agency_meta(version INTEGER PRIMARY KEY)', 'INSERT INTO agency_meta VALUES(4)',
@@ -88,6 +91,7 @@ class AgencyStore:
                 con.execute(sql)
             self.records.install(con)
             migrate_v5(con)
+            migrate_v6(con)
 
     def worker_status(self, worker_id, mode, state, *, now=None):
         if mode not in {'local', 'synthetic'} or state not in {'processing', 'idle', 'stopped'}:
@@ -130,7 +134,14 @@ class AgencyStore:
         trace = origin['trace_id'] if origin else uuid4().hex
         if origin and con.execute('SELECT count(*) FROM inbox WHERE trace_id=?', (trace,)).fetchone()[0] >= 100:
             raise ValueError('Trace task budget exceeded')
-        definition = self.agents[agent].model_dump(mode='json')
+        if parent:
+            root = con.execute('SELECT inputs FROM inbox WHERE trace_id=? AND parent_id IS NULL AND caused_by_task_id IS NULL ORDER BY created_at,id LIMIT 1', (trace,)).fetchone()
+            budget = json.loads(root['inputs']).get('max_followups') if root else None
+            if type(budget) is int and 0 <= budget <= 100:
+                used = con.execute('SELECT count(*) FROM inbox WHERE trace_id=? AND parent_id IS NOT NULL', (trace,)).fetchone()[0]
+                if used >= budget:
+                    raise ValueError('Delegation budget exceeded')
+        definition = effective_agent(con, self.agents[agent]).model_dump(mode='json')
         con.execute('''INSERT INTO inbox(id,request_key,request_hash,agent,objective,inputs,listing_ref,trace_id,
             parent_id,source,mode,priority,state,created_at,available_at,config_revision,definition,executor_tool,caused_by_task_id)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
@@ -418,37 +429,42 @@ class AgencyStore:
                     transient=False, retry_after=0, now=None):
         now = time.time() if now is None else now
         with self.transaction() as con:
-            self._owned(con, task, now)
-            call = con.execute("SELECT * FROM tool_calls WHERE id=? AND task_id=? AND state='started'", (call_id, task['id'])).fetchone()
-            if call is None:raise RuntimeError('tool_call_not_owned')
-            uncertain = error is not None and tool.effect == 'write'
-            retry=error is not None and transient and not halt and not uncertain and call['attempt']<=len(READ_DELAYS)
-            next_at=now+max(tool.min_interval_seconds,READ_DELAYS[call['attempt']-1],retry_after) if retry else now+tool.min_interval_seconds
-            state = 'uncertain' if uncertain else 'failed' if error else 'complete'
-            con.execute('UPDATE tool_calls SET state=?,result=?,finished_at=? WHERE id=?',
-                        (state, canonical({'output': result, 'error': error}), now, call_id))
-            if tool.resource:
-                con.execute('UPDATE resources SET owner=NULL,next_at=?,halted=? WHERE key=? AND owner=?',
-                            (next_at, error if halt or uncertain else None, tool.resource, call_id))
-            final_reason='read_retries_exhausted:'+error if error and transient and not retry and not uncertain else error
-            info={'tool':tool.key,'category':'transient_read','attempt':call['attempt'],
-                  'max_attempts':len(READ_DELAYS)+1,'next_at':next_at} if retry else None
-            con.execute("""UPDATE inbox SET state=?,reason=?,pending=CASE WHEN ? THEN pending ELSE NULL END,
-                retry=?,available_at=?,token=NULL,lease_until=NULL WHERE id=?""",
-                ('queued' if retry or not error else 'uncertain' if uncertain else 'blocked',final_reason,
-                 retry or halt,canonical(info) if info else None,next_at if retry else now,task['id']))
-            self._event(con, task, 'tool_finished', {'call_id': call_id, 'tool': tool.key, 'state': state,
-                                                   'output': result, 'error': error}, now)
-            if retry:
-                self._event(con,task,'task_retry_scheduled',info,now)
-                EventBus.emit(con,task,'task.retry_scheduled','attempt',call_id,self.supervisor_agent,now,info)
-            elif error:
-                incident=self._source_incident(con,task,tool.resource,error,now) if tool.resource and (halt or uncertain) else None
-                self._record_outcome(con,task,'uncertain' if uncertain else 'blocked',None,
-                                     final_reason,now,incident)
-            else:
-                record = self.records.observe(con, task, tool, call, result, now, self.supervisor_agent)
-                self._event(con, task, 'observation_recorded', {'observation_id': record, 'call_id': call_id}, now)
+            return self._finish_tool(con, task, tool, call_id, result=result, error=error, halt=halt,
+                                     transient=transient, retry_after=retry_after, now=now)
+
+    def _finish_tool(self, con, task, tool, call_id, *, result=None, error=None, halt=False,
+                     transient=False, retry_after=0, now):
+        self._owned(con, task, now)
+        call = con.execute("SELECT * FROM tool_calls WHERE id=? AND task_id=? AND state='started'", (call_id, task['id'])).fetchone()
+        if call is None:raise RuntimeError('tool_call_not_owned')
+        uncertain = error is not None and tool.effect == 'write'
+        retry=error is not None and transient and not halt and not uncertain and call['attempt']<=len(READ_DELAYS)
+        next_at=now+max(tool.min_interval_seconds,READ_DELAYS[call['attempt']-1],retry_after) if retry else now+tool.min_interval_seconds
+        state = 'uncertain' if uncertain else 'failed' if error else 'complete'
+        con.execute('UPDATE tool_calls SET state=?,result=?,finished_at=? WHERE id=?',
+                    (state, canonical({'output': result, 'error': error}), now, call_id))
+        if tool.resource:
+            con.execute('UPDATE resources SET owner=NULL,next_at=?,halted=? WHERE key=? AND owner=?',
+                        (next_at, error if halt or uncertain else None, tool.resource, call_id))
+        final_reason='read_retries_exhausted:'+error if error and transient and not retry and not uncertain else error
+        info={'tool':tool.key,'category':'transient_read','attempt':call['attempt'],
+              'max_attempts':len(READ_DELAYS)+1,'next_at':next_at} if retry else None
+        con.execute("""UPDATE inbox SET state=?,reason=?,pending=CASE WHEN ? THEN pending ELSE NULL END,
+            retry=?,available_at=?,token=NULL,lease_until=NULL WHERE id=?""",
+            ('queued' if retry or not error else 'uncertain' if uncertain else 'blocked',final_reason,
+             retry or halt,canonical(info) if info else None,next_at if retry else now,task['id']))
+        self._event(con, task, 'tool_finished', {'call_id': call_id, 'tool': tool.key, 'state': state,
+                                               'output': result, 'error': error}, now)
+        if retry:
+            self._event(con,task,'task_retry_scheduled',info,now)
+            EventBus.emit(con,task,'task.retry_scheduled','attempt',call_id,self.supervisor_agent,now,info)
+        elif error:
+            incident=self._source_incident(con,task,tool.resource,error,now) if tool.resource and (halt or uncertain) else None
+            self._record_outcome(con,task,'uncertain' if uncertain else 'blocked',None,
+                                 final_reason,now,incident)
+        else:
+            record = self.records.observe(con, task, tool, call, result, now, self.supervisor_agent)
+            self._event(con, task, 'observation_recorded', {'observation_id': record, 'call_id': call_id}, now)
 
     def resume(self, task_id, inputs, now=None):
         now = time.time() if now is None else now

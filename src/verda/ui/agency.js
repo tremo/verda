@@ -7,10 +7,10 @@ const e = (tag, text, cls) => {
 };
 let data, view = 'studio', selected = 'sahibinden', tab = 'overview', taskId = null, toolId = null, listing = '', queueFilter = 'open';
 const terminal = new Set(['complete', 'cancelled', 'failed']);
-const states = {queued:'Sırada', running:'Çalışıyor', complete:'Tamamlandı', blocked:'Engel / bağlantı bekliyor', waiting_children:'Alt görev sonucu bekliyor', waiting_user:'Kullanıcı girdisi bekliyor', uncertain:'Sonuç belirsiz · tekrar yok', failed:'Başarısız', cancelled:'İptal'};
+const states = {queued:'Sırada', waiting_browser:'Tarayıcı işlemi bekliyor', running:'Çalışıyor', complete:'Tamamlandı', blocked:'Engel / bağlantı bekliyor', waiting_children:'Alt görev sonucu bekliyor', waiting_user:'Kullanıcı girdisi bekliyor', uncertain:'Sonuç belirsiz · tekrar yok', failed:'Başarısız', cancelled:'İptal'};
 const kinds = {task_submitted:'Görev kuyruğa alındı', turn_started:'Agent görevi aldı', decision:'Bir sonraki işlem seçildi', delegated:'Başka agent’a görev verildi', tool_started:'Araç çağrıldı', tool_finished:'Araç sonucu alındı', tool_deferred:'Kaynak sırası bekleniyor', task_complete:'Görev tamamlandı', child_result_received:'Alt görev sonucu geldi', child_needs_attention:'Alt görevde engel var', task_blocked:'Görev durdu', task_waiting_user:'Kullanıcı girdisi gerekiyor', resumed:'Kullanıcı girdisiyle devam etti', worker_lost:'Çalışan kesildi'};
-Object.assign(kinds, {observation_recorded:'Bulgu ortak kayda yazıldı',outcome_recorded:'Sonuç ortak kayda yazıldı',record_delivered:'Sonuç kuyruğa teslim edildi',record_read:'Kaydedilmiş kanıt okundu'});
-const transports = {python:'Statik kod · Python', script:'Statik script', mcp:'MCP aracı', unconnected:'Kaynak adaptörü'};
+Object.assign(kinds, {browser_queued:'Tarayıcı işi kuyruğa alındı',browser_claimed:'Tarayıcı oturumu işi aldı',observation_recorded:'Bulgu ortak kayda yazıldı',outcome_recorded:'Sonuç ortak kayda yazıldı',record_delivered:'Sonuç kuyruğa teslim edildi',record_read:'Kaydedilmiş kanıt okundu'});
+const transports = {browser:'Codex · Chrome kuyruğu', python:'Statik kod · Python', script:'Statik script', mcp:'MCP aracı', unconnected:'Kaynak adaptörü'};
 const agent = key => data.agents.find(a => a.key === key)?.label || key;
 const tool = key => data.tools.find(t => t.key === key)?.label || key;
 const stamp = x => new Date(x * 1000).toLocaleString('tr-TR');
@@ -46,7 +46,7 @@ function runtimeStatus() {
   bar.replaceChildren();
   const local = data.workers.filter(w => w.mode === 'local' && w.active);
   const synthetic = data.workers.filter(w => w.mode === 'synthetic' && w.active);
-  const items = [['Yerel panel', 'Açık', true], ['Görev yürütücüsü', local.length ? 'Aktif bildirim var' : 'Aktif bildirim yok', !!local.length], ['Browser', 'Henüz bağlı değil', false], ['Kayıtlı görevler', data.total_tasks + ' · ' + count(null, c => !terminal.has(c.state)) + ' açık', true]];
+  const items = [['Yerel panel', 'Açık', true], ['Görev yürütücüsü', local.length ? 'Aktif bildirim var' : 'Aktif bildirim yok', !!local.length], ['Browser', data.browser?.active ? 'Codex · Chrome bağlı' : 'Codex oturumu bekliyor', !!data.browser?.active], ['Kayıtlı görevler', data.total_tasks + ' · ' + count(null, c => !terminal.has(c.state)) + ' açık', true]];
   items.forEach(([label, value, ready]) => {
     const n = e('div', undefined, 'runtime-item ' + (ready ? 'ready' : 'pending'));
     n.append(e('small', label), e('strong', value)); bar.append(n);
@@ -117,7 +117,7 @@ function connectionMap(a) {
   n.append(map);
   const resources = new Set(a.tools.map(k => data.tools.find(t => t.key === k).resource));
   data.connections.filter(c => resources.has(c.key) && c.kind === 'browser').forEach(c => {
-    const box = e('div', undefined, 'browser-connection'); box.append(e('strong', c.label), e('p', c.note), e('small', 'Araçların kaydı bu browser bağlantısını kendiliğinden açmaz.')); n.append(box);
+    const box = e('div', undefined, 'browser-connection'); box.append(e('strong', c.label), e('p', c.note), e('small', 'Okuma işleri kaynak sırası ve istek aralığını paylaşır. Mesaj gönderme ayrıca bağlantı bekler.')); n.append(box);
   });
   const draw = () => {
     if (!map.isConnected) return;
@@ -156,7 +156,7 @@ function renderAgents(root) {
   [['overview','Araçlar ve görevler'], ['prompt','Yönerge / prompt'], ['delegates','Görev verebildiği agent’lar']].forEach(([key,label]) => {
     const b = e('button', label, tab === key ? 'active' : ''); b.onclick = () => { tab = key; render(); }; tabs.append(b);
   }); head.append(tabs); body.append(head);
-  if (tab === 'prompt') { const p = card('Çalışma yönergesi'); p.append(e('p', 'Agent yönergesi ve ortak çalışma protokolü. Her görev tanımın sürümlü kopyasını saklar.', 'muted'), e('pre', a.prompt + '\n\n' + data.protocol_prompt)); body.append(p); }
+  if (tab === 'prompt') { const p = card('Çalışma yönergesi'); p.append(promptEditor(a)); const protocol=e('details');protocol.append(e('summary','Ortak çalışma protokolü · salt okunur'),e('pre',data.protocol_prompt));p.append(protocol);body.append(p); }
   else if (tab === 'delegates') {
     const p = card('Görev devri');
     a.delegates.forEach(key => { const b = e('button', agent(key), 'task-row'); b.onclick = () => { selected = key; tab = 'overview'; toolId = null; taskId = null; render(); }; p.append(b); });
@@ -187,7 +187,7 @@ function render() {
   studioCleanup();
   document.body.classList.toggle('studio-view', view === 'studio');
   runtimeStatus(); const nav = $('views'); nav.replaceChildren();
-  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['records','Ortak kayıtlar'], ['events','Bildirimler ve hatalar'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
+  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['records','Ortak kayıtlar'], ['research','İlanlar ve eksikler'], ['events','Bildirimler ve hatalar'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
     const b = e('button', label, 'tab' + (view === key ? ' selected' : '')); b.onclick = () => { view = key; taskId = null; render(); }; nav.append(b);
   });
   const root = $('content'); root.replaceChildren();
@@ -197,6 +197,7 @@ function render() {
   if (view === 'trace') renderTrace(root);
   if (view === 'records') renderRecords(root);
   if (view === 'events') renderEventCenter(root);
+  if (view === 'research') renderResearch(root);
   if (view === 'tools') {
     const scripts = data.tools.filter(t => t.transport === 'script');
     root.append(e('p', scripts.length + ' bağımsız script · ' + data.tools.filter(t => t.transport === 'python').length + ' statik Python aracı · ' + data.tools.filter(t => t.transport === 'mcp').length + ' MCP aracı tanımlı.', 'statusline'));

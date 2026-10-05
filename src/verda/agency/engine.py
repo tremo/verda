@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from verda.agency.registry import Registry, ResourceBlocked, TransientToolError
+from verda.agency.registry import Registry, ResourceBlocked, TransientToolError, AgentDefinition
 from verda.agency.store import AgencyStore
 from verda.providers import CodexProvider
 from verda.agency.health import worker_health
@@ -69,6 +69,8 @@ class AgentEngine:
         return worked
 
     def _step(self, *, mode='local', now=None):
+        from verda.agency.browser import BrowserBridge
+        BrowserBridge(self.store).expire(now=now)
         self.store.dispatch_record_events(mode=mode, now=now)
         task = self.store.claim(mode=mode, now=now)
         if task is None:
@@ -77,7 +79,7 @@ class AgentEngine:
             if task['config_revision'] != self.registry.config.revision:
                 self.store.transition(task, 'blocked', reason='configuration_changed', now=now)
                 return True
-            agent = self.registry.agents[task['agent']]
+            agent = AgentDefinition.model_validate_json(task['definition'])
             if task.get('executor_tool') and not task['pending']:
                 context = self.store.context(task)
                 previous = [e for e in context['history'] if e['kind'] == 'tool_finished' and e['data']['state'] == 'complete']
@@ -125,8 +127,11 @@ class AgentEngine:
                 call_id = self.store.begin_tool(task, tool, arguments, now=now)
                 if call_id is None:
                     return True
+                if tool.transport == 'browser':
+                    BrowserBridge(self.store).enqueue(task, tool, call_id, now=now)
+                    return True
                 try:
-                    result = self.registry.call(tool.key, arguments)
+                    result = self.registry.call(tool.key, arguments, context={'mode': task['mode'], 'task_id': task['id']})
                 except sqlite3.Error:
                     raise
                 except (TransientToolError,TimeoutError,ConnectionError) as error:
@@ -154,8 +159,17 @@ class AgentEngine:
         return True
 
 
-def default_registry(config):
+def default_registry(config, store=None):
     def screen(args):
         return {'within_price': args['price_tl'] <= 15_000_000,
                 'enough_area': args['area_m2'] >= 1000, 'preliminary_only': True}
-    return Registry(config, {'policy.screen': screen} if any(t.key == 'policy.screen' for t in config.tools) else {})
+    from verda.agency.research import audit, listing
+    contextual = {}
+    if store:
+        contextual = {
+            'records.audit': lambda args, context: audit(store, mode=context['mode'], exclude_task_id=context['task_id'], **args),
+            'records.listing': lambda args, context: listing(store, mode=context['mode'], **args),
+        }
+    allowed = {t.key for t in config.tools}
+    return Registry(config, {'policy.screen': screen} if 'policy.screen' in allowed else {},
+                    {k: v for k, v in contextual.items() if k in allowed})

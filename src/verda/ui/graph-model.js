@@ -10,6 +10,7 @@
       const connection=(data.connections||[]).find(c=>c.key===t.resource);
       let group, label, icon;
       if(connection?.kind==='browser'){group='resource/'+t.resource;label='Browser';icon='browser';}
+      else if(t.key.startsWith('records.')){group='records';label='Kayıt deposu';icon='database';}
       else if(t.transport==='python'){group='python';label='Hesaplama';icon='code';}
       else if(t.transport==='script'){group='script/'+t.key;label='Script';icon='code';}
       else if(t.transport==='mcp'){group='mcp/'+(t.resource||t.key);label='MCP';icon='mcp';}

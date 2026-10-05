@@ -25,7 +25,7 @@ def inspect_health(store):
         try:
             con.execute('BEGIN IMMEDIATE')
             version=con.execute('SELECT version FROM agency_meta').fetchone()[0]
-            if version!=5:raise sqlite3.DatabaseError('schema unavailable')
+            if version!=6:raise sqlite3.DatabaseError('schema unavailable')
             con.rollback()
         finally:con.close()
     except (sqlite3.Error,OSError) as exc:error=type(exc).__name__

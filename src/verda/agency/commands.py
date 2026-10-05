@@ -16,6 +16,10 @@ def add_commands(parser, commands):
     parser.add_argument('--supervisor-agent', default='manager', help='Supervisor agent key; empty string disables root result routing')
     commands.add_parser('agency-init')
     commands.add_parser('agency-status')
+    browser = commands.add_parser('agency-browser')
+    browser.add_argument('action', choices=['attach','detach','claim','finish','status'])
+    browser.add_argument('--worker', default='codex-chrome')
+    browser.add_argument('--file', type=Path)
     subscription=commands.add_parser('agency-subscription')
     subscription.add_argument('file',type=Path)
     resolve=commands.add_parser('agency-source-resume')
@@ -50,7 +54,23 @@ def run(args):
     config = AgencyConfig.load(args.agency_config)
     store = AgencyStore(args.agency_db, config, supervisor_agent=args.supervisor_agent or None)
     store.initialize()
+    if args.database.startswith('sqlite:///'):
+        store.archive_path = Path(args.database[len('sqlite:///'):])
     command = args.command
+    if command == 'agency-browser':
+        from verda.agency.browser import BrowserBridge
+        bridge = BrowserBridge(store)
+        if args.action == 'attach':
+            bridge.attach(args.worker)
+        elif args.action == 'detach':
+            bridge.detach(args.worker)
+        elif args.action == 'claim':
+            return bridge.claim(args.worker)
+        elif args.action == 'finish':
+            if not args.file:
+                raise ValueError('Receipt file required')
+            bridge.finish(worker=args.worker, **json.loads(args.file.read_text()))
+        return bridge.overview()
     if command == 'agency-init':
         return {'initialized': True, 'agents': len(config.agents), 'tools': len(config.tools)}
     if command == 'agency-subscription':
@@ -78,6 +98,7 @@ def run(args):
         from verda.agency.demo import synthetic_registry
         registry = synthetic_registry(config)
         store = AgencyStore(args.agency_db, registry.config, supervisor_agent=args.supervisor_agent or None)
+        registry.context_handlers.update(default_registry(registry.config, store).context_handlers)
         task = store.submit(agent='manager', objective='Sahibinden operatörüne DEMO-101 ilanının ayrıntısını okuma görevi ver. Dönen fiyat ve alanı özetle ve tamamla. Başka araştırma yapma.',
             inputs={'synthetic': True, 'listing_id': 'DEMO-101'}, listing_ref='DEMO-101',
             request_key=args.request_key or 'agency-demo:' + uuid4().hex, mode='synthetic')
@@ -93,7 +114,7 @@ def run(args):
         return {'task_id': task, 'state': root['state'], 'trace_id': root['trace_id'],
                 'tasks': sum(t['trace_id'] == root['trace_id'] for t in result['tasks']), 'mode': 'synthetic',
                 'provider': registry.agents['manager'].model.provider}
-    engine = AgentEngine(store, default_registry(config))
+    engine = AgentEngine(store, default_registry(config, store))
     steps = 0
     try:
         while args.continuous or steps < args.max_steps:

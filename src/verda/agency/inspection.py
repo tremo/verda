@@ -3,10 +3,13 @@ from pathlib import Path
 
 
 def tool_description(registry, tool):
-    handler = registry.handlers.get(tool.key)
+    handler = registry.handlers.get(tool.key) or registry.context_handlers.get(tool.key)
     if handler:
         status, label = 'ready', 'Hazır · yerel kod'
         implementation = {'kind': 'python', 'entrypoint': handler.__module__ + '.' + handler.__name__}
+    elif tool.transport == 'browser':
+        status, label = 'configured', 'Codex tarayıcı kuyruğu · okuma'
+        implementation = {'kind': 'browser'}
     elif tool.transport in {'script', 'mcp'}:
         status, label = 'configured', 'Tanımlı · bağlantı doğrulanmadı'
         # Never expose argv, environment, URLs, or credentials through the inspector.
@@ -28,6 +31,6 @@ def connection_descriptions(config):
         connections.append({'key': key, 'label': 'Browser · Sahibinden oturumu' if browser else key,
                             'kind': 'browser' if browser else 'resource',
                             'session_status': 'unconnected' if browser else 'not_observed',
-                            'note': 'Mac Chrome oturumu Verda’ya henüz atanmadı. Jev de bağlı değil.' if browser
+                            'note': 'Codex tarayıcı köprüsü; bağlantı ve bekleyen işler üst durum kartında.' if browser
                                     else 'Araçların paylaştığı kaynak kuyruğu; bağlantı durumu araç kartında.'})
     return connections

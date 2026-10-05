@@ -35,7 +35,7 @@ Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` d
 
 ### Agent merkezi: görev, agent ve araç ayrı kavramlardır
 
-`http://127.0.0.1:8765/control` yeni agent merkezidir. Sunucunun `.local/viewer-link` dosyasına yazdığı tek kullanımlık bağlantıyı önce aynı Mac'in tarayıcısında açın. Bağlantı 10 dakika, salt okunur oturum dört saat geçerlidir. Sunucu yeniden başlatılınca yeni bağlantı gerekir. Bağlantıyı paylaşmayın. Bu oturum kuyruk yazma yetkisi vermez; yazma API'leri Bearer anahtarı ister ve browser Origin başlığını reddeder.
+`http://127.0.0.1:8765/control` yeni agent merkezidir. Sunucunun `.local/viewer-link` dosyasına yazdığı tek kullanımlık bağlantıyı önce aynı Mac'in tarayıcısında açın. Bağlantı 10 dakika, yerel oturum dört saat geçerlidir. Sunucu yeniden başlatılınca yeni bağlantı gerekir. Bağlantıyı paylaşmayın. Panel oturumu agent yönergesi/açıklaması düzenlemeye ve sınırlı yönetici inceleme görevi oluşturmaya izin verir; bu uçlar aynı Origin ve oturuma özgü CSRF başlığı ister. Genel komut API’leri Bearer anahtarı ister ve browser Origin başlığını reddeder.
 
 - **Agent:** Sorumluluk alanı, yönergesi, model profili, araç yetkileri, delegasyon hedefleri ve gelen işler kuyruğu olan yürütücü. Sürekli açık bir model konuşması değildir; kayıtlı bağlamla uyanır.
 - **Görev:** Bir agent'a atanmış hedef; girdisi, önceliği, ilan ilişkisi, kaynağı ve durumu vardır. “Doğal sit kontrolü” bir görevdir.
@@ -55,13 +55,29 @@ Ana harita zamanlayıcı→agent ve yönetici→operatör bağlarını gösterir
 
 Zamanlayıcı düğümü kayıtlı saati (Europe/Istanbul), tekrar aralığını, etkin/pasif durumunu, hedef agent'a gönderilen görev metnini, girdiyi, önceliği ve oluşmuş görevleri gösterir. Sabit tekrar aralığı çalışma süresi değildir: mevcut çekirdekte toplam görev süresi sınırı yoktur; agent'ın karar turu ve tek model çağrısı sınırları ayrıca gösterilir. Doğrudan statik araç işi oluşturan tetikleyicide model çağrısı olmadığı belirtilir. Olay tetikleyicisi olay türünü ve gerçek girdi kaynağını gösterir.
 
-**Çalışma izi** seçeneği aynı tuvalde seçilen izin görevlerini, gerçekleşmiş devirleri, araç çağrılarını ve kaydedilmiş sonuç dönüşlerini çizer. Görev ve çağrı düğümleri verilen girdiyi ve kaydedilmiş çıktıyı açar. Tanımlı bir yetki gerçekleşmiş işlem olarak gösterilmez. Yakınlaştırma, sığdırma, tuvali ve düğümleri sürükleme vardır; konumlar yalnız mevcut sayfa oturumundadır. Bu teslimat inceleme tuvalidir: bağlantı kurma/silme, prompt veya zamanlama değiştirme ve görev başlatma henüz yoktur.
+**Çalışma izi** seçeneği aynı tuvalde seçilen izin görevlerini, gerçekleşmiş devirleri, araç çağrılarını ve kaydedilmiş sonuç dönüşlerini çizer. Görev ve çağrı düğümleri verilen girdiyi ve kaydedilmiş çıktıyı açar. Tanımlı bir yetki gerçekleşmiş işlem olarak gösterilmez. Yakınlaştırma, sığdırma, tuvali ve düğümleri sürükleme vardır; konumlar yalnız mevcut sayfa oturumundadır. Prompt ve görev açıklaması hem bu panelden hem Agent listesi sekmesinden düzenlenebilir. Bağlantı kurma/silme ve zamanlama düzenleme henüz yoktur; İlanlar ve eksikler sekmesinden yönetici incelemesi başlatılabilir.
 
 Araç kartı yerel Python kodunu, scripti, MCP kaydını ve henüz bağlanmamış adaptörü ayırır; yapılandırılmış bir script/MCP bağlantısı doğrulanmış gibi gösterilmez. Browser oturumunun durumu, paylaşılan kaynak, istek aralığı ve yazma politikası da görünür. Eski agent listesi ve kayıt sekmeleri ayrıntılı liste görünümü olarak korunur.
 
 Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicileri ve ilan bazında görev izi ayrı sekmelerde incelenebilir. Kuyruk bekleyen/çalışan ve tamamlanan işleri ayırır; her işin kaynağı, önceliği, girdisi, sonucu ve araç çağrıları görünür. Doğrudan statik araçla yürütülen görev “Model kullanmaz” olarak işaretlenir. Toplam sayaçlar bütün görevleri kapsar; listede son 200 görev, olaylarda son 1.000 kayıt sınırı ve kesilme uyarısı vardır.
 
-Üst durum kartları panelin açık olmasıyla görev yürütücüsünün çalışmasını ayırır. Worker bildirimi işlenirken en fazla 600 saniye, boşta 15 saniye geçerlidir; normal kapanışta durdu olarak kaydedilir. Bu gösterge işletim sistemi süreç denetimi değildir; ani kapanış son bildirim süresi dolana kadar görünmeyebilir. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz. Varsayılan kayıtta bir çalışır Python hesaplaması vardır; bağımsız script ve MCP aracı henüz eklenmemiştir.
+Üst durum kartları panelin açık olmasıyla görev yürütücüsünün çalışmasını ayırır. Worker bildirimi işlenirken en fazla 600 saniye, boşta 15 saniye geçerlidir; normal kapanışta durdu olarak kaydedilir. Bu gösterge işletim sistemi süreç denetimi değildir; ani kapanış son bildirim süresi dolana kadar görünmeyebilir. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz. Varsayılan kayıtta ön eleme hesabı ve iki kayıt okuma aracı vardır; bağımsız script ve MCP aracı henüz eklenmemiştir.
+
+### Yönerge düzenleme ve yöneticinin kayıt takibi
+
+Agent kartındaki **Kalıcı yönerge / system prompt** ve **Görev açıklaması** alanları düzenlenebilir. Kaydetme sürümlü ve kalıcıdır; başka pencerede değişmiş eski sürümün üzerine yazılmaz. Yeni görevler son kaydedilen yönergeyi alır; mevcut görevlerin kendi yönerge kopyaları değişmez. Yerel değişiklikler `agent_revisions` tablosunda saklanır, GitHub’a yazılmaz. Ortak çalışma protokolü ve araç yetkileri bu editörden değişmez.
+
+Ana yönetici hedefi, kriterleri, bütçeyi ve sonuçları takip eder. `records.audit` mevcut ilanları, yapılandırılmış kaynak alanlarındaki boşlukları, açık görevleri ve hataları gösterir. `records.listing` ilgili ilanın kaynak bulgularını, agent kararlarını ve eski kontrol/yazışma arşivini sayfalı okur. Eski kayıtlar boş sayılmaz; satıcı beyanını agent sonuçlarından ve mevcut yazışmalardan okumadan tekrar soru sorulmaz. Yeni ve eski kayıtlar birleştirilirken arşiv yeniden yazılmaz. Sentetik görevler gerçek arşive erişmez.
+
+**İlanlar ve eksikler** sekmesinden kayıt ve akış açılabilir; **Yöneticiye incelet** düğmesi kayıtları okuyacak bir yönetici işi oluşturur. Aynı kapsamda açık inceleme varken ikinci görev üretilmez. Her inceleme en fazla bir operatör görevi verebilir; sınır veritabanında da uygulanır. Önceden elenmiş ilana bu düğmeyle yeniden görev verilmez. Geçici okuma hatalarını motor sınırlı tekrarlarla ele alır; yönetici yeni görevlerle bu sınırı aşmamalıdır. Erişim engeli, belirsiz işlem ve bağlı olmayan araçlar yeni sorgu döngüsü oluşturmaz.
+
+### Mevcut Chrome oturumuyla ilk canlı arama
+
+`sahibinden.search` ve `sahibinden.read_listing` araçları kalıcı **Codex tarayıcı kuyruğuna** bağlıdır. Model araç kararını verir; görev `waiting_browser` durumuna geçer ve izinli tarayıcı sürücüsü mevcut Chrome oturumuyla işlemi yapar. Dönen kaynak kaydı, araç sonucu ve bildirim aynı veritabanı işlemiyle yazılır. Sonuç görev üzerinden yöneticiye döner; tekrar gelen aynı makbuz ikinci kayıt oluşturmaz. Kaynak URL’si, ilan kimliği ve arama filtreleri kontrol edilir. İşlem sırasında bağlantı kaybolursa otomatik yeniden gezinilmez; belirsiz iş kaynağı durdurur.
+
+Bu ilk sürücüyü **aktif Codex oturumu** yürütür. Verda worker’ı Chrome’u tek başına kontrol etmez; Codex tarayıcı sürücüsü yokken yeni browser işleri kuyrukta bekler. Oturum göstergesi 10 dakikalık geçerlilik taşır ve normal ayrılmada kapatılır. Cookie veya profil kopyalanmaz. Jev kurulmadı; başka bir sürücü aynı iş/makbuz sözleşmesine bağlanabilir. Mesaj gönderme ve konuşma okuma henüz bağlı değildir.
+
+Sürücü sözleşmesi ve kullanımı: [docs/BROWSER-DRIVER.md](docs/BROWSER-DRIVER.md). İlk canlı arama 5 Ekim 2026’da mevcut Chrome üzerinde, Datça satılık arsa / en fazla 15 milyon TL / en az 1.000 m² filtreleriyle doğrulandı. İlk sonuç sayfası ortak kayda yazıldı; diğer sayfalar ve ilan ayrıntıları bu çalışmada açılmadı. Gerçek sonuçlar `.local` altında tutulur, bu depoya eklenmez.
 
 ### Ortak kayıt servisi, abonelikler ve hata yönetimi
 
@@ -102,9 +118,11 @@ Abonelikler yerel CLI ile yönetilir:
 
 `/control/private/health` kuyruktan bağımsız olarak depoya erişimi ve yazma kilidini kontrol eder. Worker kayıt hatasını ayrıca veritabanının yanındaki özel `.health/` dizinine yazar. Panel bu kontrolü görünürken 15 saniyede bir okur; sunucuya erişemiyorsa gösterilen verinin eski olabileceğini belirtir. Kontrol gelecekteki her disk yazmasının başarılı olacağını garanti etmez. Mac kapalıyken dışarıdan izleyen bir bulut servisi yoktur.
 
-**Bildirimler ve hatalar** sekmesinde abonelik filtreleri, alıcıların ayrı teslim/işleme zamanları, sonraki denemeler ve kaynak olayından etkilenen işler görünür. Agent denetleyicisinde abonelikler ve haritada kayıt servisi bağlantıları vardır. Çalışma izindeki sonuç birden fazla alıcıya bağlanabilir. Büyük kanıtlar görev kapsamlı kayıt okumasıyla parçalar halinde alınır; yalnız kendi veya teslim edilmiş kanıtlara erişilir.
+**Bildirimler ve hatalar** sekmesinde abonelik filtreleri, alıcıların ayrı teslim/işleme zamanları, sonraki denemeler ve kaynak olayından etkilenen işler görünür. Agent denetleyicisinde abonelikler ve haritada kayıt servisi bağlantıları vardır. Çalışma izindeki sonuç birden fazla alıcıya bağlanabilir. Büyük kanıtlar görev kapsamlı kayıt okumasıyla parçalar halinde alınır; bu işlem yalnız kendi veya teslim edilmiş kanıtlara erişir. Yöneticinin ayrıca verilmiş records.audit ve records.listing yetkileri aynı çalışma modundaki kayıtları araştırma amacıyla okuyabilir.
 
 Şema v5 geçişi eski gözlem, sonuç, görev ve teslim kimliklerini korur. Eski sonuçlar için yeni alıcılar eklenmez ve geçmiş işler yeniden çalıştırılmaz. Önceki sürümde teslim edilmiş sonuçların işleme onayı `legacy` olarak belirtilir. Yükseltmeden önce veritabanı yedeği alınmalıdır.
+
+Geçerli şema v6 ayrıca yerel yönerge sürümlerini, tarayıcı sürücü oturumlarını ve tarayıcı iş makbuzlarını saklar. Eski görev ve kaynak kayıtları korunur; yükseltme tarayıcı işi veya model çağrısı başlatmaz.
 
 Bu katman kaynak bildirimlerini ve değerlendirmeleri saklar. Nihai kanıt kabulü, çelişki çözümü, ilan adaylığına bağlayıcı politika uygulanması, canlı browser/mesaj doğrulaması ve eski dashboard'a yayın ayrı tamamlanacak parçalardır.
 
@@ -249,7 +267,7 @@ Zamanlayıcı JSON kaydı `key`, `kind: "timer"`, `next_at` (UTC Unix zamanı), 
 
 ### Açık kalan alan işleri
 
-Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Seçilmiş Chrome oturumu, Sahibinden/TKGM bağlantıları, gerçek kanıt kabulü, nihai ilan bilgi görünümü, mesaj kurallarının uygulanması ve teslimat uzlaştırması, genel cron/saat dilimi desteği, kontrol panelinden düzenleme/başlatma ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrılar otomatik tekrarlanmaz; dış kaynak doğrulaması ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
+Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Sahibinden arama/ilan okuma için Codex tarayıcı köprüsü, prompt editörü ve yönetici inceleme girişi çalışır. Gözetimsiz tarayıcı sürücüsü, TKGM, mesaj/yanıt bağlantıları, mesaj kuralları ve teslimat uzlaştırması, genel cron/saat dilimi desteği ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrılar otomatik tekrarlanmaz; dış kaynak doğrulaması ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
 
 Sahibinden için 180 saniye **araç çağrısı** aralığı tanımlıdır; bir araç birden çok site isteği yapıyorsa alt tarayıcı katmanı da bunları sınırlamalıdır. Bu sitenin izin verdiği veya engellemeyeceği bir sınır değildir. Önceki 5 işlik grup/30 dakika mola önerisi henüz uygulanmamıştır.
 

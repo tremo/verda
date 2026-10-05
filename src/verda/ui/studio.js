@@ -236,7 +236,7 @@ function renderStudio(root) {
         button.append(studioIcon(action.icon),text);tasks.append(button);
       });panel.append(tasks);
       panel.append(e('p','Bu liste agent’ın tanımlı yetkilerini gösterir. Göreve tıklayarak gerekli girdiyi ve bağlantı durumunu inceleyebilirsin.','muted'));
-      if(cap.icon==='browser')panel.append(e('p','Browser oturumu bağlanınca bu işler aynı kaynak kuyruğunu ve istek sınırını paylaşacak.','muted'));
+      if(cap.icon==='browser')panel.append(e('p','Okuma işleri Codex tarayıcı kuyruğuna gider. Aynı kaynak kilidi ve istek aralığını paylaşır; gönderim bağlı değildir.','muted'));
     } else if (kind === 'record') {
       recordInspector(panel,'outcome',key);
     } else if (kind === 'service') {
@@ -245,8 +245,8 @@ function renderStudio(root) {
     } else if (kind === 'agent') {
       const a = data.agents.find(a => a.key === key); if (!a) return;
       panel.append(e('p','AGENT','eyebrow'),e('h2',a.label),e('p',a.description),chips([a.model.provider,a.model.model || 'Varsayılan model','Prompt v' + a.version]));
-      const prompt = studioSection('Kalıcı yönerge / system prompt'); prompt.append(e('pre',a.prompt,'inspector-prompt')); panel.append(prompt);
-      panel.append(e('p','Ortak kayıt erişimi: kendi bulgularını ve kendisine teslim edilen sonuçların kanıtlarını okuyabilir. Kayıt yazma ve teslimi çalışma motoru yapar.','inspector-note'));
+      const prompt = studioSection('Kalıcı yönerge / system prompt'); prompt.append(promptEditor(a)); panel.append(prompt);
+      panel.append(e('p',a.tools.includes('records.audit')?'Kayıt deposu erişimi: aynı çalışma türündeki ilanları, eksikleri, açık işleri ve eski kontrol/yazışma arşivini okuyabilir. Kayıt yazma ve teslimi çalışma motoru yapar.':'Ortak kayıt erişimi: kendi bulgularını ve kendisine teslim edilen sonuçların kanıtlarını okuyabilir. Kayıt yazma ve teslimi çalışma motoru yapar.','inspector-note'));
       const tools = studioSection('Kullanabildiği araçlar');
       VerdaGraph.capabilities(data,key).forEach(cap=>tools.append(capabilityButton(cap,inspect)));
       if (!a.tools.length) tools.append(e('p','Atanmış araç yok.','muted')); panel.append(tools);
@@ -302,7 +302,7 @@ function renderStudio(root) {
     if(n.kind==='agent'){const a=data.agents.find(a=>a.key===n.key);type='AGENT';subtitle=a.model.provider+' · prompt v'+a.version;status=count(a.key,c=>!terminal.has(c.state))+' açık görev';}
     if(n.kind==='trigger'){const t=data.triggers.find(t=>t.key===n.key);type=t.kind==='timer'?'ZAMANLAYICI':'OLAY';subtitle=t.kind==='timer'?'Her '+VerdaGraph.timerDetails(t).interval+' · '+VerdaGraph.timerDetails(t).clock:t.spec.event_type;status=(t.enabled?'Etkin':'Pasif')+(t.spec.mode==='synthetic'?' · ÖRNEK':'');}
     if(n.kind==='tool'){const t=data.tools.find(t=>t.key===n.key);type=transports[t.transport];subtitle=t.status_label;}
-    if(n.kind==='connection'){const c=data.connections.find(c=>c.key===n.key);type=c.kind==='browser'?'BROWSER':'KAYNAK';subtitle=c.kind==='browser'?'Henüz bağlı değil':'Paylaşılan kaynak kuyruğu';}
+    if(n.kind==='connection'){const c=data.connections.find(c=>c.key===n.key);type=c.kind==='browser'?'BROWSER':'KAYNAK';subtitle=c.kind==='browser'?(data.browser?.active?'Codex · Chrome bağlı':'Codex oturumu bekliyor'):'Paylaşılan kaynak kuyruğu';}
     if(n.kind==='task'){const t=data.tasks.find(t=>t.id===n.key);type=t.executor_tool?'STATİK GÖREV':'AGENT GÖREVİ';subtitle=states[t.state]||t.state;status=(t.listing_ref||'İlan bağı yok')+(t.mode==='synthetic'?' · ÖRNEK':'');}
     if(n.kind==='call'){type='ARAÇ ÇAĞRISI';subtitle=n.finish ? (states[n.finish.data.state]||n.finish.data.state) : 'Sonuç kaydı yok';}
     if(n.kind==='record'){type='ORTAK KAYIT';subtitle=states[n.outcome.state]||n.outcome.state;status=n.outcome.observation_ids.length+' kaynak bulgusu';}

@@ -19,8 +19,11 @@ def main():
     parser.add_argument("--database", default="sqlite:///.local/verda.sqlite",
                         help="SQLAlchemy URL (default: local development database)")
     parser.add_argument("--workflow-db", type=Path, default=Path(".local/workflows.sqlite"))
+    parser.add_argument("--runtime-config", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
+    commands.add_parser("runtime-info")
+    commands.add_parser("manager-demo")
     demo = commands.add_parser("demo-run")
     demo.add_argument("--request-key", default="synthetic-demo-v1")
     workflow_step = commands.add_parser("workflow-step")
@@ -39,6 +42,18 @@ def main():
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--token-file", type=Path, default=Path(".local/api-token"))
     args = parser.parse_args()
+    if args.command in {"runtime-info", "manager-demo"}:
+        from verda.runtime import Runtime, RuntimeConfig, manager_preview
+        runtime = Runtime(RuntimeConfig.load(args.runtime_config))
+        if args.command == "runtime-info":
+            result = runtime.describe()
+        else:
+            result = manager_preview(runtime,
+                {"label": "Sentetik bağlantı testi", "listing_read": True,
+                 "parcel_identity": "missing", "note": "Gerçek ilan veya yazışma içermez."},
+                ["resolve_parcel_identity", "ask_user_for_missing_identity"])
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     workflow_store = WorkflowStore(args.workflow_db)
     if args.command in {"demo-run", "workflow-step", "workflow-status", "workflow-cancel"}:
         from verda.worker import step

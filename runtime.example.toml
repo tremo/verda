@@ -1,0 +1,19 @@
+# Copy to .local/runtime.toml. This file contains no credentials.
+# With no model field, Codex CLI chooses its own default model.
+[default]
+provider = "codex"
+timeout_seconds = 120
+
+[agents.manager]
+provider = "codex"
+timeout_seconds = 120
+# model = "your-account-supported-model"
+
+# After registering another ModelProvider adapter, an individual specialist
+# can use it without changing workflow storage or the other specialists.
+# [agents.sahibinden]
+# provider = "another_vendor"
+# model = "your-chosen-model"
+
+# These model profiles apply only to model actions. Rule evaluation, API
+# lookups and calculations do not become model calls through configuration.

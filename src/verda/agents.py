@@ -23,4 +23,5 @@ AGENTS = (
 
 
 def catalog() -> list[dict]:
-    return [asdict(agent) for agent in AGENTS]
+    from verda.execution import KINDS
+    return [{**asdict(agent), "execution": KINDS[agent.key]} for agent in AGENTS]

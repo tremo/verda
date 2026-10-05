@@ -22,7 +22,7 @@ class WorkflowRequest(BaseModel):
 def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("An API token of at least 32 characters is required")
-    app = FastAPI(title="Verda v2 — shadow backend", version="0.2.0", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Verda v2 — shadow backend", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
 
     def authorize(authorization: str | None = Header(default=None)):
         expected = "Bearer " + token

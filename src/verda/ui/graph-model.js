@@ -39,7 +39,13 @@
       const t=data.triggers.find(t=>t.key===n.key), target=nodes.find(n=>n.id==='agent:'+t.spec.agent);
       n.width=230;n.height=115;n.x=0;n.y=data.triggers.length===1&&target?target.y+25:50+i*155;
     });
-    return {nodes,edges:graph.edges.filter(e=>['trigger','delegate'].includes(e.kind))};
+    const edges=graph.edges.filter(e=>['trigger','delegate'].includes(e.kind));
+    if(data.records){
+      nodes.push(node('service:records','service','records','Ortak kayıt servisi',310+columns.length*450,height/2-50,{width:250,height:115}));
+      data.agents.forEach(a=>edges.push({from:'agent:'+a.key,to:'service:records',kind:'recorded',label:'Bulgu ve sonuç kaydı'}));
+      if(data.supervisor_agent&&data.agents.some(a=>a.key===data.supervisor_agent))edges.push({from:'service:records',to:'agent:'+data.supervisor_agent,kind:'returned',label:'Sonucu kuyruğa teslim eder'});
+    }
+    return {nodes,edges};
   }
   function topology(data) {
     const nodes = [], edges = [], agents = new Map(data.agents.map(a => [a.key, a]));
@@ -86,21 +92,28 @@
     const taskIds = new Set(tasks.map(t => t.id));
     tasks.forEach((t, i) => {
       const a = data.agents.find(a => a.key === t.agent);
-      nodes.push(node('task:' + t.id, 'task', t.id, a?.label || t.agent, 340, 90 + i * 210));
+      nodes.push(node('task:' + t.id, 'task', t.id, a?.label || t.agent, 340, 90 + i * 310));
       if (t.parent_id && taskIds.has(t.parent_id)) edges.push({from:'task:' + t.parent_id, to:'task:' + t.id, kind:'delegated', label:'Görev devredildi'});
-      if (!t.parent_id) {
-        nodes.push(node('source:' + t.id, 'source', t.id, t.source === 'user' ? 'Kullanıcı isteği' : t.source, 20, 90 + i * 210));
+      if (!t.parent_id && !t.caused_by_task_id) {
+        nodes.push(node('source:' + t.id, 'source', t.id, t.source === 'user' ? 'Kullanıcı isteği' : t.source, 20, 90 + i * 310));
         edges.push({from:'source:' + t.id, to:'task:' + t.id, kind:'trigger', label:'Görev oluşturdu'});
       }
       const calls = data.events.filter(e => e.task_id === t.id && e.kind === 'tool_started');
       calls.forEach((event, j) => {
         const finish = data.events.find(e => e.task_id === t.id && e.kind === 'tool_finished' && e.data.call_id === event.data.call_id);
-        nodes.push(node('call:' + event.id, 'call', event.id, data.tools.find(tool => tool.key === event.data.tool)?.label || event.data.tool, 670 + j * 260, 90 + i * 210, {event, finish}));
+        nodes.push(node('call:' + event.id, 'call', event.id, data.tools.find(tool => tool.key === event.data.tool)?.label || event.data.tool, 670 + j * 260, 90 + i * 310, {event, finish}));
         edges.push({from:'task:' + t.id, to:'call:' + event.id, kind:'executed', label:'Araç çağrıldı'});
       });
       // A result return is evidence, not an inferred reverse delegation permission.
       const result = data.events.find(e => e.task_id === t.parent_id && e.kind === 'child_result_received' && e.data.child_id === t.id);
-      if (result && taskIds.has(t.parent_id)) edges.push({from:'task:' + t.id, to:'task:' + t.parent_id, kind:'returned', label:'Sonuç döndü'});
+      const outcomes=(data.records?.outcomes||[]).filter(o=>o.task_id===t.id).sort((a,b)=>a.version-b.version);
+      outcomes.forEach((o,j)=>{
+        nodes.push(node('record:'+o.id,'record',o.id,o.kind==='manager_decision'?'Yönetici kararı':'Kaydedilen sonuç',670+j*260,205+i*310,{outcome:o}));
+        edges.push({from:'task:'+t.id,to:'record:'+o.id,kind:'recorded',label:'Sonuç ve kanıtlar saklandı'});
+        const delivery=(data.records?.deliveries||[]).find(d=>d.outcome_id===o.id);
+        if(delivery?.state==='delivered'&&taskIds.has(delivery.target_task_id))edges.push({from:'record:'+o.id,to:'task:'+delivery.target_task_id,kind:'returned',label:'Kuyruğa teslim edildi'});
+      });
+      if (!outcomes.length && result && taskIds.has(t.parent_id)) edges.push({from:'task:' + t.id, to:'task:' + t.parent_id, kind:'returned', label:'Sonuç döndü'});
     });
     return {nodes, edges};
   }

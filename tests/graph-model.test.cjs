@@ -76,3 +76,25 @@ test('execution graph isolates a trace and only shows evidenced calls and return
   assert(graph.edges.some(e=>e.kind==='returned'&&e.from==='task:child'&&e.to==='task:parent'));
   assert(!run({...data,events:data.events.slice(0,2)},'one').edges.some(e=>e.kind==='returned'));
 });
+
+
+test('common record service is static and has a configured result route',()=>{
+  const data={...config,triggers:[],connections:[],records:{},supervisor_agent:'manager'};
+  const graph=VerdaGraph.agentNetwork(data);
+  assert.equal(graph.nodes.find(n=>n.id==='service:records').kind,'service');
+  assert.equal(graph.edges.filter(e=>e.to==='service:records').length,4);
+  assert(graph.edges.some(e=>e.from==='service:records'&&e.to==='agent:manager'&&e.kind==='returned'));
+});
+
+test('direct operator result routes through recorded outcome to causal manager task',()=>{
+  const data={...config,tasks:[
+    {id:'read',agent:'sahibinden',trace_id:'one',created_at:1,source:'timer:morning'},
+    {id:'review',agent:'manager',trace_id:'one',created_at:2,source:'record:result',caused_by_task_id:'read'}
+  ],events:[],records:{outcomes:[{id:'result',task_id:'read',version:1,state:'complete',observation_ids:['o']}],deliveries:[{outcome_id:'result',state:'delivered',target_task_id:'review'}]}};
+  const graph=run(data,'one');
+  assert(!graph.nodes.some(n=>n.id==='source:review'));
+  assert(graph.edges.some(e=>e.from==='task:read'&&e.to==='record:result'&&e.kind==='recorded'));
+  assert(graph.edges.some(e=>e.from==='record:result'&&e.to==='task:review'&&e.kind==='returned'));
+  data.records.deliveries[0].state='pending';
+  assert(!run(data,'one').edges.some(e=>e.kind==='returned'));
+});

@@ -115,7 +115,7 @@ def main():
             runtime = Runtime(RuntimeConfig.load(args.runtime_config))
             from verda.agency.registry import AgencyConfig
             from verda.agency.store import AgencyStore
-            agency_store = AgencyStore(args.agency_db, AgencyConfig.load(args.agency_config))
+            agency_store = AgencyStore(args.agency_db, AgencyConfig.load(args.agency_config), supervisor_agent=args.supervisor_agent or None)
             agency_store.initialize()
             nonce = secrets.token_urlsafe(32)
             args.viewer_link_file.parent.mkdir(parents=True, exist_ok=True)

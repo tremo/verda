@@ -23,7 +23,7 @@ def config():
 
 def setup(tmp_path, cfg=None, handlers=None):
     cfg = cfg or config()
-    s = AgencyStore(tmp_path / 'agency.sqlite', cfg)
+    s = AgencyStore(tmp_path / 'agency.sqlite', cfg, supervisor_agent=None)
     s.initialize()
     return s, Registry(cfg, handlers or {'test.read': lambda args: {'read': args['id']}})
 
@@ -301,6 +301,11 @@ def test_worker_migration_preserves_existing_tasks(tmp_path):
     s,r=setup(tmp_path)
     task=submit(s,now=0)
     with s.transaction() as con:
+        con.execute('DROP TABLE record_deliveries')
+        con.execute('DROP TABLE record_outcomes')
+        con.execute('DROP TABLE observations')
+        con.execute('ALTER TABLE inbox DROP COLUMN record_version')
+        con.execute('ALTER TABLE inbox DROP COLUMN caused_by_task_id')
         con.execute('DROP TABLE workers')
         con.execute('UPDATE agency_meta SET version=2')
     s.initialize()

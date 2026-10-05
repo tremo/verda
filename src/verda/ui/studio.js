@@ -6,6 +6,7 @@ let studioCleanup = () => {};
 function studioIcon(kind) {
   const paths={
     agent:['M12 3v3','M9 3h6','M6 7h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z','M4 12H2m18 0h2','M8 12h.01M16 12h.01','M9 16h6'],
+    database:['M3 6c0-5 18-5 18 0s-18 5-18 0Z','M3 6v12c0 5 18 5 18 0V6','M3 12c0 5 18 5 18 0'],
     clock:['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z','M12 7v5l3 2'],
     browser:['M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z','M3 9h18','M6 6.5h.01m3 0h.01m3 0h.01'],
     code:['m8 7-5 5 5 5m8-10 5 5-5 5','m14 4-4 16'],
@@ -111,7 +112,7 @@ function renderStudio(root) {
     const traces = [...new Set(data.tasks.map(t => t.trace_id))];
     if (!traces.includes(studioTrace)) studioTrace = traces.find(id => data.tasks.filter(t => t.trace_id === id).length > 1) || traces[0] || '';
     traces.forEach(id => {
-      const tasks = data.tasks.filter(t => t.trace_id === id), first = tasks.find(t => !t.parent_id) || tasks[0];
+      const tasks = data.tasks.filter(t => t.trace_id === id), first = tasks.find(t => !t.parent_id && !t.caused_by_task_id) || tasks[0];
       picker.append(new Option((first.listing_ref || first.objective.slice(0,40)) + ' · ' + tasks.length + ' görev' + (first.mode === 'synthetic' ? ' · ÖRNEK' : '') + ' · ' + stamp(first.created_at), id));
     });
     picker.value = studioTrace;
@@ -129,7 +130,7 @@ function renderStudio(root) {
   world.append(svg); viewport.append(world);
   const panel = e('aside', undefined, 'studio-inspector'); panel.setAttribute('aria-label', 'Seçili düğüm ayrıntıları');
   const legend = e('div', undefined, 'studio-legend');
-  const legendItems = studioMode === 'topology' ? [['trigger','Görev oluşturur'],['delegate','Görev verebilir'],...(studioDetailed?[['tool','Araç yetkisi'],['resource','Ortak kaynak']]:[])] : [['trigger','Görev oluştu'],['delegated','Devredildi'],['executed','Araç çağrıldı'],['returned','Sonuç döndü']];
+  const legendItems = studioMode === 'topology' ? [['trigger','Görev oluşturur'],['delegate','Görev verebilir'],...(!studioDetailed?[['recorded','Ortak kayda yazılır'],['returned','Sonuç teslimi']]:[]),...(studioDetailed?[['tool','Araç yetkisi'],['resource','Ortak kaynak']]:[])] : [['trigger','Görev oluştu'],['delegated','Devredildi'],['executed','Araç çağrıldı'],['recorded','Ortak kayda yazıldı'],['returned','Sonuç teslimi']];
   legendItems.forEach(([kind,label]) => legend.append(e('span', label, 'legend-' + kind)));
   const note = e('p', studioMode === 'topology' ? 'Bağlar tanımlı yetki ve hedefleri gösterir. Düğüme tıkla; boşluğu sürükleyerek gezin. Düğümleri taşıyabilirsin.' : 'Bağlar kaydedilmiş işlemleri gösterir. Göreve tıklayarak devredilen girdiyi ve sonucu incele.' + (data.events_truncated ? ' Son 1.000 olay gösterildiği için eski çağrı ve dönüşler eksik olabilir.' : ''), 'studio-help');
   layout.append(viewport, panel); shell.append(toolbar, legend, layout, note); root.append(shell);
@@ -161,7 +162,7 @@ function renderStudio(root) {
   function drawEdges() {
     svg.replaceChildren();
     const defs = document.createElementNS(svg.namespaceURI, 'defs');
-    for (const kind of ['trigger','delegate','tool','resource','delegated','executed','returned']) {
+    for (const kind of ['trigger','delegate','tool','resource','delegated','executed','returned','recorded']) {
       const marker = document.createElementNS(svg.namespaceURI, 'marker'); marker.id = 'arrow-' + kind;
       for (const [key,value] of Object.entries({viewBox:'0 0 10 10',refX:'9',refY:'5',markerWidth:'7',markerHeight:'7',orient:'auto-start-reverse'})) marker.setAttribute(key,value);
       const triangle = document.createElementNS(svg.namespaceURI, 'path'); triangle.setAttribute('d','M 0 0 L 10 5 L 0 10 z'); triangle.classList.add('arrow', 'edge-' + kind); marker.append(triangle); defs.append(marker);
@@ -212,7 +213,7 @@ function renderStudio(root) {
       b.classList.toggle('selected',key===selectedNode);
       (b.matches('button')?b:b.querySelector('.node-main')).setAttribute('aria-pressed',String(key===selectedNode));
     });
-    drawEdges(); panel.replaceChildren(); panel.scrollTop = 0;
+    drawEdges(); panel.dataset.recordRequest=''; panel.replaceChildren(); panel.scrollTop = 0;
     const entry = nodes.get(id);
     if (id.startsWith('task:')) {
       const t = data.tasks.find(t => 'task:' + t.id === id);
@@ -236,10 +237,15 @@ function renderStudio(root) {
       });panel.append(tasks);
       panel.append(e('p','Bu liste agent’ın tanımlı yetkilerini gösterir. Göreve tıklayarak gerekli girdiyi ve bağlantı durumunu inceleyebilirsin.','muted'));
       if(cap.icon==='browser')panel.append(e('p','Browser oturumu bağlanınca bu işler aynı kaynak kuyruğunu ve istek sınırını paylaşacak.','muted'));
+    } else if (kind === 'record') {
+      recordInspector(panel,'outcome',key);
+    } else if (kind === 'service') {
+      panel.append(e('p','ORTAK SERVİS · STATİK KOD','eyebrow'),e('h2','Ortak kayıt servisi'),e('p','Araç çıktısını olduğu gibi kaydeder. Görev bitince veya engellenince sonucu ve kanıt kimliklerini teslim eder. Model kullanmaz.'),studioFields([['Üst görev varsa','Sonuç mevcut üst göreve döner'],['Doğrudan operatör işi','Yöneticiye değerlendirme görevi oluşturur'],['Teslim bekleyen',String(data.records.pending_count)],['Teslim engeli',String(data.records.blocked_count)]]),e('p','Kuyruğa teslim edilmesi, yöneticinin değerlendirmeyi bitirdiği anlamına gelmez. Worker çalıştığında sıradaki görevi alır.','inspector-note'),studioButton('Bulguları ve sonuçları aç',()=>{view='records';render();}));
     } else if (kind === 'agent') {
       const a = data.agents.find(a => a.key === key); if (!a) return;
       panel.append(e('p','AGENT','eyebrow'),e('h2',a.label),e('p',a.description),chips([a.model.provider,a.model.model || 'Varsayılan model','Prompt v' + a.version]));
       const prompt = studioSection('Kalıcı yönerge / system prompt'); prompt.append(e('pre',a.prompt,'inspector-prompt')); panel.append(prompt);
+      panel.append(e('p','Ortak kayıt erişimi: kendi bulgularını ve kendisine teslim edilen sonuçların kanıtlarını okuyabilir. Kayıt yazma ve teslimi çalışma motoru yapar.','inspector-note'));
       const tools = studioSection('Kullanabildiği araçlar');
       VerdaGraph.capabilities(data,key).forEach(cap=>tools.append(capabilityButton(cap,inspect)));
       if (!a.tools.length) tools.append(e('p','Atanmış araç yok.','muted')); panel.append(tools);
@@ -297,11 +303,14 @@ function renderStudio(root) {
     if(n.kind==='connection'){const c=data.connections.find(c=>c.key===n.key);type=c.kind==='browser'?'BROWSER':'KAYNAK';subtitle=c.kind==='browser'?'Henüz bağlı değil':'Paylaşılan kaynak kuyruğu';}
     if(n.kind==='task'){const t=data.tasks.find(t=>t.id===n.key);type=t.executor_tool?'STATİK GÖREV':'AGENT GÖREVİ';subtitle=states[t.state]||t.state;status=(t.listing_ref||'İlan bağı yok')+(t.mode==='synthetic'?' · ÖRNEK':'');}
     if(n.kind==='call'){type='ARAÇ ÇAĞRISI';subtitle=n.finish ? (states[n.finish.data.state]||n.finish.data.state) : 'Sonuç kaydı yok';}
+    if(n.kind==='record'){type='ORTAK KAYIT';subtitle=states[n.outcome.state]||n.outcome.state;status=n.outcome.observation_ids.length+' kaynak bulgusu';}
+    if(n.kind==='service'){type='STATİK SERVİS';subtitle='Kalıcı kayıt + sonuç teslimi';status=data.records.pending_count+' teslim bekliyor';}
     if(n.kind==='source'){type='TETİKLEME';subtitle='Kaydedilmiş görev girdisi';}
     let icon='tool';
     if(n.kind==='agent'||n.kind==='task')icon='agent';
     if(n.kind==='trigger')icon=data.triggers.find(t=>t.key===n.key).kind==='timer'?'clock':'event';
     if(n.kind==='source')icon='event';
+    if(n.kind==='record'||n.kind==='service')icon='database';
     if(n.kind==='connection')icon=data.connections.find(c=>c.key===n.key).kind==='browser'?'browser':'layers';
     if(n.kind==='tool')icon=studioAction(data.tools.find(t=>t.key===n.key)).icon;
     if(n.kind==='task'&&data.tasks.find(t=>t.id===n.key).executor_tool)icon='code';

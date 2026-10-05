@@ -94,6 +94,15 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
     def old_definitions():
         return FileResponse(assets / "index.html")
 
+    @app.get("/control/private/records/{kind}/{record_id}", dependencies=[Depends(viewer)])
+    def record_view(kind: str, record_id: str):
+        if agency_store is None:
+            raise HTTPException(503, 'Agency not configured')
+        try:
+            return agency_store.record_detail(kind, record_id)
+        except KeyError:
+            raise HTTPException(404, 'Record not found')
+
     @app.get("/control/private/agency", dependencies=[Depends(viewer)])
     def agency_view(listing_ref: str | None = None, trace_id: str | None = None):
         if agency_store is None:

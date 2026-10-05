@@ -59,24 +59,29 @@ Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicile
 
 Üst durum kartları panelin açık olmasıyla görev yürütücüsünün çalışmasını ayırır. Worker bildirimi işlenirken en fazla 600 saniye, boşta 15 saniye geçerlidir; normal kapanışta durdu olarak kaydedilir. Bu gösterge işletim sistemi süreç denetimi değildir; ani kapanış son bildirim süresi dolana kadar görünmeyebilir. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz. Varsayılan kayıtta bir çalışır Python hesaplaması vardır; bağımsız script ve MCP aracı henüz eklenmemiştir.
 
-### Mimari değerlendirme: merkezi yönetim ve veri sahipliği
+### Ortak kayıt servisi ve yöneticiye sonuç dönüşü
 
-**Önerilen sonraki adım; aşağıdaki ortak bulgu deposu ve otomatik olay teslimi henüz uygulanmadı.** Mevcut `agency_events` araç sonuçlarını ve görev geçmişini saklar; bu, alan bazında kanıt/provenans içeren ortak ilan bilgi deposunun tamamlandığı anlamına gelmez.
+Bu akış uygulanmıştır. `agency/records.py` aynı uygulama içinde normal Python kodu olarak çalışır; ayrı bir agent veya model çağrısı değildir. Agent'lar SQL yazmaz. Çalışma motoru başarılı araç çıktısını, araç çağrısının tamamlanma kaydıyla aynı işlemde değişmez bir gözlem olarak saklar. Fiyat, alan, rakım ve parsel kimliği için basit tip/alan normalleştirmesi vardır. Ham çıktı, araç/görev/agent kimliği, çalışma modu, ilan bağı, kayıt zamanı ve içerik özeti korunur. Kayıt zamanı kaynağın gözlem zamanı gibi sunulmaz; adaptör bildirirse kaynak zamanı/URL ham çıktıda yer alır.
 
-Ana yönetici araştırmanın hedefini, önceliklerini, yeni görevlerini ve ilan hakkındaki kararlarını yönetmelidir. Her ham bulguyu ana yöneticinin modeline yeniden yazdırmak maliyet, gecikme ve tek noktada tıkanma yaratır. Operatörler de ortak ilan satırını serbestçe değiştirmemelidir. Yazma işlemini yetki ve şema denetleyen **tek kayıt servisi** yapmalıdır; ilk Mac sürümünde bu ayrı bir sunucu değil, aynı uygulama içindeki normal bir Python modülü olabilir.
+| Aşama | Davranış |
+|---|---|
+| Araç bulgusu | Kayıt servisi değişmez `observations` kaydı ekler; yeni değer eskisini ezmez |
+| Görev tamamlandı veya engellendi | Sonuç, neden ve gözlem kimlikleri sürümlü `record_outcomes` kaydına yazılır |
+| Görevi başka agent vermişti | Sonuç mevcut üst göreve teslim edilir; bekleyen üst görev devam eder |
+| Zamanlayıcı/kullanıcı doğrudan operatöre verdi | Kalıcı teslim kuyruğu yöneticinin gelen işlerine değerlendirme görevi ekler |
+| Yönetici değerlendirdi | Kararı ayrıca kaydedilir; kendisine sonsuz değerlendirme zinciri oluşturmaz |
 
-| Kayıt | Kim üretir? | Nasıl kaydedilir? |
-|---|---|---|
-| Kaynak gözlemi: ilan metni, fiyat, koordinat, yanıt | Kaynağa erişen operatör/araç | Kayıt servisi, kaynak zamanı ve kanıt referansıyla değişmez bir gözlem ekler |
-| Normalleştirilmiş alan: TL, m², koordinat sistemi | Statik dönüştürücü/doğrulayıcı | Kaynak gözlemine bağlı, sürümlü alan kaydı; çelişki eski veriyi ezmez |
-| Karar: ek inceleme, adaylık, sonraki görev | Ana yönetici + bağlayıcı politika kontrolleri | Kanıt kimliklerine dayanan ayrı karar kaydı |
-| Dış işlem: satıcı mesajı, dashboard yayını | Yetkili yürütücü | Mesaj politikası, tekilleştirme ve teslimat kaydıyla kontrollü çıkış |
+**Operatör → ortak kayıt → yönetici** yolu artık doğrudan operatör işlerinde de vardır. Çıktı ile sonucun ayrılması, çok araçlı bir görevin her ara çıktısı için yeni yönetici işi açılmasını önler. Engellenme, belirsiz yürütme, kullanıcı girdisi bekleme, hata ve iptal sonuçları da raporlanır. Üst görevi olmayan yönetici işi kendine yeni iş üretmez. Farklı agent'lar üzerinden devam eden aynı iz en fazla 100 görevle sınırlıdır.
 
-İlan ayrıntısı okuma akışı: operatör aracı çağırır → çalışma motoru sonucu kayıt servisine verir → gözlem ve `observation.recorded` teslim kaydı aynı veritabanı işleminde oluşur → olay ana yönetici kuyruğuna gelir → yönetici kayıt kimliklerini ve kısa özeti okuyup sonraki işi seçer. Yönetici çalışmıyorsa olay bekler; gözlem kaybolmaz. Olay yeniden teslim edilirse aynı görev iki kez oluşturulmaz. Ham kanıtın tamamını her model çağrısına kopyalamak gerekmez.
+Sonuç ve teslim kaydı aynı SQLite işleminde oluşur. Worker her adımın başında bekleyen kayıtları kuyruğa aktarır. Değerlendirme görevinin eklenmesi ve teslimin işaretlenmesi de tek işlemdir; yeniden başlama ve eşzamanlı teslimde aynı sonuç iki göreve dönüşmez. Bu garanti kuyruk teslimine aittir; dış sitede bir mesajın tam bir kez gönderilmesi ayrı bir konu ve henüz uygulanmış değildir. Teslimin tamamlanması yöneticinin değerlendirmeyi bitirdiği anlamına gelmez.
 
-Zamanlayıcı, önceden tanımlanmış rutin bir işi doğrudan operatöre verebilir; her sabah aynı aramayı başlatmak için yöneticiye model çağrısı yaptırmak gerekmez. Böyle bir görevin sonucunun da yöneticiyi uyandırması gerekir. **Mevcut eksik:** `_wake_parent` yalnız devredilmiş alt görevin üst görevini uyandırır. Zamanlayıcının doğrudan oluşturduğu, üst görevi olmayan işin sonucu otomatik olarak genel olay aboneliğine teslim edilmez. `publish` ile dış olay teslimi vardır; tamamlanmış görevden bu teslimata dayanıklı bağ henüz yoktur.
+Hedef agent yoksa veya teslim başarısızsa kayıt korunur ve `blocked` teslim olarak görünür. Yapılandırma düzeltildikten sonra `verda agency-records-retry DELIVERY_ID` teslimi tekrar beklemeye alır; kaynak aracını yeniden çağırmaz. Hedef varsayılan olarak `manager`dır; global `--supervisor-agent KEY` ile değişebilir, açıkça boş değer verilirse doğrudan işlerin yöneticiye yönlendirilmesi kapatılır. Mevcut teslimler oluşturuldukları hedefi korur.
 
-Diğer sınırlar: “araştırma agent'ı” karar/değerlendirme rolüyle sınırlandırılmalı; rota, rakım ve eşik kontrolü gibi belirli hesaplar statik araçlarda kalmalıdır. Browser bağlantısı ile onun sunduğu `search/read/send` işlemleri ayrıdır; tek Browser yetkisi sınırsız gezinme veya mesaj gönderme izni olmamalıdır. Mevcut `effect=write` kapısı bütün yazmaları mesaj politikası olmadığı için durdurur; gelecekte yerel gözlem kaydı, dış mesaj ve yayın yetkileri ayrı etkiler ve kurallarla tanımlanmalıdır. Yerel bulgu kaydı bir satıcı mesajıyla aynı onay yoluna sokulmamalıdır.
+Yöneticiye kısa sonuç ve kanıtlar verilir. Büyük bulgulara görev kapsamlı `kind=record` okuma işlemiyle 8.000 karakterlik parçalar halinde erişilir. Agent yalnız kendi bulgularını veya kendisine teslim edilmiş kanıtları okuyabilir; görev girdisine başka bir kayıt kimliği yazmak erişim sağlamaz. Yerel ve sentetik görevler aynı teslim kuyruğunda birbirine karışmaz.
+
+**Ortak kayıtlar** sekmesinde kaynak bulguları, sonuçlar ve teslim durumu açılır. Ana haritada ortak kayıt servisi görünür; **Çalışma izi** üzerinde kayıt düğümü, operatör sonucunun hangi yönetici görevine ulaştığını gösterir. Yönetici değerlendirme görevi ilk görevle aynı iz ve ilan bağına sahiptir. Eski sürümde tamamlanmış işler geriye dönük yeniden değerlendirilmez. Şema v4 geçişi mevcut görevleri korur; yükseltmeden önce veritabanı yedeği alınmalıdır.
+
+Bu katman kaynak bildirimlerini saklar; bağımsız doğrulanmış nihai ilan bilgisi değildir. Kanıt kabulü, çelişki çözümü, koordinat sistemleri, ilan adaylığına bağlayıcı politika uygulanması ve mevcut dashboard'a yayın henüz tamamlanmadı. Karar/yorum, ham kaynak bulgusundan ayrı tutulur. Canlı browser ve mesaj politikası da ayrı tamamlanacak parçalardır.
 
 ## Ürün hedefi: n8n tarzı görsel otomasyon stüdyosu
 
@@ -219,7 +224,7 @@ Zamanlayıcı JSON kaydı `key`, `kind: "timer"`, `next_at` (UTC Unix zamanı), 
 
 ### Açık kalan alan işleri
 
-Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Seçilmiş Chrome oturumu, Sahibinden/TKGM bağlantıları, gerçek kanıt kabulü, ortak ilan bilgi deposuna yeni gözlem yazan araçlar, mesaj kurallarının uygulanması ve teslimat uzlaştırması, genel cron/saat dilimi desteği, kontrol panelinden düzenleme/başlatma ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrıların yeniden denenmesi ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
+Bu teslimat genel agent çekirdeğini değiştirir; canlı emlak operasyonunu tamamlamaz. Seçilmiş Chrome oturumu, Sahibinden/TKGM bağlantıları, gerçek kanıt kabulü, nihai ilan bilgi görünümü, mesaj kurallarının uygulanması ve teslimat uzlaştırması, genel cron/saat dilimi desteği, kontrol panelinden düzenleme/başlatma ve canlı Firestore yayını ayrı tamamlanacak parçalardır. Worker otomatik sistem servisi olarak kurulmaz. Yazma etkili araçlar mesaj politikası olmadığı sürece çalıştırılmaz. Belirsiz çağrıların yeniden denenmesi ve konfigürasyon değişmiş görevlerin taşınması için otomatik uzlaştırma yoktur.
 
 Sahibinden için 180 saniye **araç çağrısı** aralığı tanımlıdır; bir araç birden çok site isteği yapıyorsa alt tarayıcı katmanı da bunları sınırlamalıdır. Bu sitenin izin verdiği veya engellemeyeceği bir sınır değildir. Önceki 5 işlik grup/30 dakika mola önerisi henüz uygulanmamıştır.
 
@@ -378,4 +383,4 @@ node --test tests/graph-model.test.cjs
 
 Testler sentetik SQLite, geçici dosyalar ve yerel HTTP istemcisi kullanır. Kaynak değişmezliği, tekrar aktarım, geçmişin ve mesaj durumlarının korunması, yetkisiz erişim, politika eşikleri ve dashboard alanlarının kaybolmaması kontrol edilir. Görev motorunda eşzamanlı sahiplenme, süre aşımı, yeniden başlama, deneme sınırı, bağımlılıklar, iptal ve örnek/gerçek iş ayrımı ayrıca test edilir.
 
-Yeni agent döngüsü, dinamik delegasyon, kalıcı gelen işler, model kullanmayan görevler, kaynak sıralaması, olay/zamanlayıcı girişi ve script/MCP araçları ayrıca test edilir. Canlı kaynak adaptörleri, kanıt kabulü, mesaj politikası ve otomatik Firestore yayını henüz tamamlanmamıştır.
+Ortak kayıtta işlem bütünlüğü, tekrar teslim, yeniden başlatma, teslim engeli/tekrar deneme, değişmez bulgular, görev kapsamlı okuma ve eski şema geçişi de test edilir. Yeni agent döngüsü, dinamik delegasyon, kalıcı gelen işler, model kullanmayan görevler, kaynak sıralaması, olay/zamanlayıcı girişi ve script/MCP araçları ayrıca test edilir. Canlı kaynak adaptörleri, kanıt kabulü, mesaj politikası ve otomatik Firestore yayını henüz tamamlanmamıştır.

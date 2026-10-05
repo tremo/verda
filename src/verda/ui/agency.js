@@ -9,12 +9,13 @@ let data, view = 'studio', selected = 'sahibinden', tab = 'overview', taskId = n
 const terminal = new Set(['complete', 'cancelled', 'failed']);
 const states = {queued:'Sırada', running:'Çalışıyor', complete:'Tamamlandı', blocked:'Engel / bağlantı bekliyor', waiting_children:'Alt görev sonucu bekliyor', waiting_user:'Kullanıcı girdisi bekliyor', uncertain:'Sonuç belirsiz · tekrar yok', failed:'Başarısız', cancelled:'İptal'};
 const kinds = {task_submitted:'Görev kuyruğa alındı', turn_started:'Agent görevi aldı', decision:'Bir sonraki işlem seçildi', delegated:'Başka agent’a görev verildi', tool_started:'Araç çağrıldı', tool_finished:'Araç sonucu alındı', tool_deferred:'Kaynak sırası bekleniyor', task_complete:'Görev tamamlandı', child_result_received:'Alt görev sonucu geldi', child_needs_attention:'Alt görevde engel var', task_blocked:'Görev durdu', task_waiting_user:'Kullanıcı girdisi gerekiyor', resumed:'Kullanıcı girdisiyle devam etti', worker_lost:'Çalışan kesildi'};
+Object.assign(kinds, {observation_recorded:'Bulgu ortak kayda yazıldı',outcome_recorded:'Sonuç ortak kayda yazıldı',record_delivered:'Sonuç kuyruğa teslim edildi',record_read:'Kaydedilmiş kanıt okundu'});
 const transports = {python:'Statik kod · Python', script:'Statik script', mcp:'MCP aracı', unconnected:'Kaynak adaptörü'};
 const agent = key => data.agents.find(a => a.key === key)?.label || key;
 const tool = key => data.tools.find(t => t.key === key)?.label || key;
 const stamp = x => new Date(x * 1000).toLocaleString('tr-TR');
 const json = x => e('pre', JSON.stringify(x, null, 2));
-const source = s => s.startsWith('agent:') ? 'Agent: ' + agent(s.slice(6)) : s.startsWith('timer:') ? 'Zamanlayıcı: ' + s.slice(6) : s.startsWith('event:') ? 'Olay: ' + s.slice(6) : 'Kullanıcı';
+const source = s => s.startsWith('record:') ? 'Ortak kayıt servisi' : s.startsWith('agent:') ? 'Agent: ' + agent(s.slice(6)) : s.startsWith('timer:') ? 'Zamanlayıcı: ' + s.slice(6) : s.startsWith('event:') ? 'Olay: ' + s.slice(6) : 'Kullanıcı';
 const count = (key, predicate) => data.task_counts.filter(c => (!key || c.agent === key) && predicate(c)).reduce((n, c) => n + c.count, 0);
 function card(title) {
   const n = e('section', undefined, 'agency-card');
@@ -67,6 +68,7 @@ function taskDetail(t) {
     const parent = data.tasks.find(x => x.id === t.parent_id);
     n.append(e('p', 'Görevi veren: ' + (parent ? agent(parent.agent) + ' — ' + parent.objective : t.parent_id), 'muted'));
   }
+  taskRecordLinks(n, t);
   n.append(e('h3', 'Atanan girdi'), json(t.inputs));
   if (t.result) n.append(e('h3', 'Kaydedilen sonuç'), json(t.result));
   n.append(e('h3', 'İşlem izi'));
@@ -182,7 +184,7 @@ function render() {
   studioCleanup();
   document.body.classList.toggle('studio-view', view === 'studio');
   runtimeStatus(); const nav = $('views'); nav.replaceChildren();
-  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
+  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['records','Ortak kayıtlar'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
     const b = e('button', label, 'tab' + (view === key ? ' selected' : '')); b.onclick = () => { view = key; taskId = null; render(); }; nav.append(b);
   });
   const root = $('content'); root.replaceChildren();
@@ -190,6 +192,7 @@ function render() {
   if (view === 'studio') renderStudio(root);
   if (view === 'agents') renderAgents(root);
   if (view === 'trace') renderTrace(root);
+  if (view === 'records') renderRecords(root);
   if (view === 'tools') {
     const scripts = data.tools.filter(t => t.transport === 'script');
     root.append(e('p', scripts.length + ' bağımsız script · ' + data.tools.filter(t => t.transport === 'python').length + ' statik Python aracı · ' + data.tools.filter(t => t.transport === 'mcp').length + ' MCP aracı tanımlı.', 'statusline'));
@@ -198,5 +201,51 @@ function render() {
   if (view === 'triggers') {
     renderTriggerCatalog(root);
   }
+}
+const deliveryStates={pending:'Yönetici kuyruğuna teslim bekliyor',delivered:'Kuyruğa teslim edildi',blocked:'Teslim engellendi'};
+function recordButton(kind, record, label) {
+  const b=e('button',label,'task-row');
+  b.onclick=()=>{view='records';recordSelection={kind,id:record.id};render();};return b;
+}
+let recordSelection=null;
+function taskRecordLinks(n,t){
+  if(t.caused_by_task_id)n.append(e('p','Bu değerlendirme, ortak kayıt servisinin teslim ettiği bir sonuçtan doğdu.','muted'));
+  const observations=(data.records?.observations||[]).filter(o=>o.task_id===t.id);
+  const outcomes=(data.records?.outcomes||[]).filter(o=>o.task_id===t.id);
+  if(observations.length||outcomes.length)n.append(e('h3','Ortak kayıtlar'));
+  observations.forEach(o=>n.append(recordButton('observation',o,'Bulgu · '+tool(o.tool))));
+  outcomes.forEach(o=>n.append(recordButton('outcome',o,'Sonuç v'+o.version+' · '+(states[o.state]||o.state))));
+}
+async function recordInspector(n,kind,id){
+  const request=kind+':'+id;n.dataset.recordRequest=request;
+  n.append(e('p','Kayıt yükleniyor…','muted'));
+  try{
+    const response=await fetch('/control/private/records/'+encodeURIComponent(kind)+'/'+encodeURIComponent(id));
+    if(!response.ok)throw Error('Kayıt okunamadı; yerel oturumunu kontrol et.');
+    const r=await response.json();if(!n.isConnected||n.dataset.recordRequest!==request)return;n.replaceChildren();
+    n.append(e('h2',kind==='observation'?'Kaynak bulgusu':'Kaydedilen görev sonucu'),chips([agent(r.agent),r.mode==='synthetic'?'ÖRNEK VERİ':'Yerel kayıt',r.listing_ref||'İlan bağı yok']),e('p','Kayıt zamanı: '+stamp(r.captured_at||r.recorded_at),'muted'));
+    if(kind==='observation'){
+      n.append(e('p','Bu kayıt aracın bildirdiği veridir; bağımsız doğrulama veya ilan kararı değildir. Eski bulguların üzerine yazılmaz.','inspector-note'),e('h3',tool(r.tool)),json(r.fields),e('h3','Kaynak çıktısı'),json(r.payload));
+    }else{
+      n.append(e('p',states[r.state]||r.state));if(r.reason)n.append(e('p',r.reason));
+      const delivery=data.records.deliveries.find(d=>d.outcome_id===r.id);
+      n.append(e('p',delivery?deliveryStates[delivery.state]+' → '+agent(delivery.target_agent):r.kind==='manager_decision'?'Yönetici kararı kaydedildi; kendisine yeniden iş oluşturmaz.':'Bu sonucun teslim hedefi yok.','inspector-note'));
+      if(delivery?.error)n.append(e('p','Teslim hata türü: '+delivery.error+' · Kayıt saklanıyor.','empty'));
+      if(delivery?.target_task_id){const t=data.tasks.find(t=>t.id===delivery.target_task_id);if(t){const b=e('button','Teslim edilen görevi aç','task-row');b.onclick=()=>{view='studio';studioMode='run';studioTrace=t.trace_id;studioSelection='task:'+t.id;studioCamera=null;render();};n.append(b);}}
+      n.append(e('h3','Sonuç / yorum'),json(r.result),e('h3','İlişkili kaynak bulguları · '+r.observations.length));
+      r.observations.forEach(o=>{const d=e('details',undefined,'event');d.append(e('summary',tool(o.tool)+' · '+stamp(o.captured_at)),e('p','Kaynak bildirimi; bağımsız doğrulanmış bilgi değil.','muted'),json(o.payload));n.append(d);});
+    }
+    const raw=e('details',undefined,'event');raw.append(e('summary','Kayıt kimliği ve bütün ayrıntılar'),json(r));n.append(raw);
+  }catch(err){if(n.isConnected&&n.dataset.recordRequest===request)n.replaceChildren(e('p',err.message,'empty'));}
+}
+function renderRecords(root){
+  const records=data.records, heading=card('Ortak kayıt servisi');
+  heading.append(e('p','Araç bulgusu → kalıcı kayıt → görev sonucu → yönetici kuyruğu. Yazmayı normal kod yapar; değerlendirmeyi agent yapar.'),chips([records.observation_count+' bulgu',records.outcome_count+' sonuç',records.pending_count+' teslim bekliyor',records.blocked_count+' teslim engeli']));root.append(heading);
+  const layout=e('div',undefined,'trace-layout'), list=card('Sonuçlar ve bulgular'), detail=card();
+  records.outcomes.forEach(r=>list.append(recordButton('outcome',r,(r.listing_ref||agent(r.agent))+' · '+(r.kind==='manager_decision'?'Yönetici kararı':'Görev sonucu')+' · '+(states[r.state]||r.state)+(r.mode==='synthetic'?' · ÖRNEK':''))));
+  records.observations.forEach(r=>list.append(recordButton('observation',r,(r.listing_ref||agent(r.agent))+' · '+tool(r.tool)+(r.mode==='synthetic'?' · ÖRNEK':''))));
+  list.append(e('p','Görüntülenen görevlerin en son 200 bulgusu ve 200 sonucu. Önceki sürümde bitmiş görevler geriye dönük işletilmez.','muted'));
+  layout.append(list,detail);root.append(layout);
+  if(recordSelection)recordInspector(detail,recordSelection.kind,recordSelection.id);else detail.append(e('p','Kaynak çıktısını ve yöneticiye teslimini görmek için bir kayıt seç.'));
 }
 $('refresh').onclick = load; load();

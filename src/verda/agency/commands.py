@@ -12,8 +12,11 @@ from verda.agency.store import AgencyStore
 def add_commands(parser, commands):
     parser.add_argument('--agency-db', type=Path, default=Path('.local/agency.sqlite'))
     parser.add_argument('--agency-config', type=Path)
+    parser.add_argument('--supervisor-agent', default='manager', help='Supervisor agent key; empty string disables root result routing')
     commands.add_parser('agency-init')
     commands.add_parser('agency-status')
+    retry = commands.add_parser('agency-records-retry')
+    retry.add_argument('delivery_id')
     demo = commands.add_parser('agency-demo')
     demo.add_argument('--request-key', default=None)
     demo.add_argument('--max-steps', type=int, default=12)
@@ -39,13 +42,16 @@ def add_commands(parser, commands):
 
 def run(args):
     config = AgencyConfig.load(args.agency_config)
-    store = AgencyStore(args.agency_db, config)
+    store = AgencyStore(args.agency_db, config, supervisor_agent=args.supervisor_agent or None)
     store.initialize()
     command = args.command
     if command == 'agency-init':
         return {'initialized': True, 'agents': len(config.agents), 'tools': len(config.tools)}
     if command == 'agency-status':
         return store.overview()
+    if command == 'agency-records-retry':
+        store.retry_record_delivery(args.delivery_id)
+        return {'delivery_id': args.delivery_id, 'state': 'pending'}
     if command == 'agency-submit':
         return {'task_id': store.submit(agent=args.agent, objective=args.objective,
                 inputs=json.loads(args.inputs.read_text()) if args.inputs else {}, request_key=args.request_key,
@@ -59,7 +65,7 @@ def run(args):
     if command == 'agency-demo':
         from verda.agency.demo import synthetic_registry
         registry = synthetic_registry(config)
-        store = AgencyStore(args.agency_db, registry.config)
+        store = AgencyStore(args.agency_db, registry.config, supervisor_agent=args.supervisor_agent or None)
         task = store.submit(agent='manager', objective='Sahibinden operatörüne DEMO-101 ilanının ayrıntısını okuma görevi ver. Dönen fiyat ve alanı özetle ve tamamla. Başka araştırma yapma.',
             inputs={'synthetic': True, 'listing_id': 'DEMO-101'}, listing_ref='DEMO-101',
             request_key=args.request_key or 'agency-demo:' + uuid4().hex, mode='synthetic')

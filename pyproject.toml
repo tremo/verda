@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "verda-v2"
+version = "0.1.0"
+description = "Local Verda research backend with a read-only legacy migration boundary"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.142.2,<1",
+  "pydantic>=2.13.5,<3",
+  "sqlalchemy>=2.0.54,<2.1",
+  "uvicorn>=0.54.0,<1",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.3.6,<4"]
+test = ["pytest>=9.1.1,<10", "httpx>=0.28.1,<1"]
+
+[project.scripts]
+verda = "verda.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

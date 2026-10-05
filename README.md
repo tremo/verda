@@ -45,7 +45,9 @@ Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` d
 
 Yeni merkezde dört başlangıç rolü vardır: ana yönetici, Sahibinden operatörü, parsel operatörü ve araştırma agent'ı. Roller Python enum'uyla sınırlandırılmaz. Yeni bir rol yapılandırmaya eklenebilir. Önceki yedi rolün kataloğu `/control/legacy-definitions`, sabit dokuz görevli örnek ve eski ilan geçmişi `/control/flows` altında tarihsel inceleme için kalır; bunlar yeni çalışma modelini temsil etmez.
 
-Ana görünüm **Akış tuvali**dir. Bağlantı haritası kayıtlı tetikleyicileri, agent'ları, araçları ve paylaşılan kaynakları aynı tuvalde gösterir. Zamanlayıcı→agent, yönetici→operatör, agent→araç ve araç→kaynak bağlantıları farklı çizgilerle ayrılır. Bir aracı birden fazla agent kullanıyorsa tek araç düğümüne bağlanırlar. Agent düğümüne tıklanınca kalıcı prompt, model, araçlar, tetikleyiciler, görev devri yetkileri ve gelen işler sağ panelde açılır.
+Ana görünüm **Akış tuvali**dir. Büyük agent kartlarının içinde araç ikonları bulunur; agent ve zamanlayıcı kendi simgeleriyle ayrılır. Sahibinden operatöründeki **Browser** ikonuna tıklanınca yalnız o agent'ın yetkili olduğu görev türleri açılır: ilan arama, ilan ayrıntısı okuma, mesaj gönderme, yanıt okuma. İşleme tıklanınca gerekli girdiler ve bağlantı durumu görülür. Browser, bu işlemlerin paylaştığı yetkinlik/oturum grubudur; bir ikonun görünmesi oturumun bağlandığı anlamına gelmez. Python, script ve MCP araçları da gruplanır; bu gruplama çalışma yetkilerini genişletmez.
+
+Ana harita zamanlayıcı→agent ve yönetici→operatör bağlarını gösterir. **Ayrıntılı araç ağı** aynı kayıtların bütün agent→araç→kaynak bağlantılarını açar. Bir aracı birden fazla agent kullanıyorsa bu görünümde tek araç düğümüne bağlanırlar. Agent düğümüne tıklanınca kalıcı prompt, model, araçlar, tetikleyiciler, görev devri yetkileri ve gelen işler sağ panelde açılır.
 
 Zamanlayıcı düğümü kayıtlı saati (Europe/Istanbul), tekrar aralığını, etkin/pasif durumunu, hedef agent'a gönderilen görev metnini, girdiyi, önceliği ve oluşmuş görevleri gösterir. Sabit tekrar aralığı çalışma süresi değildir: mevcut çekirdekte toplam görev süresi sınırı yoktur; agent'ın karar turu ve tek model çağrısı sınırları ayrıca gösterilir. Doğrudan statik araç işi oluşturan tetikleyicide model çağrısı olmadığı belirtilir. Olay tetikleyicisi olay türünü ve gerçek girdi kaynağını gösterir.
 
@@ -56,6 +58,25 @@ Araç kartı yerel Python kodunu, scripti, MCP kaydını ve henüz bağlanmamı�
 Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicileri ve ilan bazında görev izi ayrı sekmelerde incelenebilir. Kuyruk bekleyen/çalışan ve tamamlanan işleri ayırır; her işin kaynağı, önceliği, girdisi, sonucu ve araç çağrıları görünür. Doğrudan statik araçla yürütülen görev “Model kullanmaz” olarak işaretlenir. Toplam sayaçlar bütün görevleri kapsar; listede son 200 görev, olaylarda son 1.000 kayıt sınırı ve kesilme uyarısı vardır.
 
 Üst durum kartları panelin açık olmasıyla görev yürütücüsünün çalışmasını ayırır. Worker bildirimi işlenirken en fazla 600 saniye, boşta 15 saniye geçerlidir; normal kapanışta durdu olarak kaydedilir. Bu gösterge işletim sistemi süreç denetimi değildir; ani kapanış son bildirim süresi dolana kadar görünmeyebilir. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz. Varsayılan kayıtta bir çalışır Python hesaplaması vardır; bağımsız script ve MCP aracı henüz eklenmemiştir.
+
+### Mimari değerlendirme: merkezi yönetim ve veri sahipliği
+
+**Önerilen sonraki adım; aşağıdaki ortak bulgu deposu ve otomatik olay teslimi henüz uygulanmadı.** Mevcut `agency_events` araç sonuçlarını ve görev geçmişini saklar; bu, alan bazında kanıt/provenans içeren ortak ilan bilgi deposunun tamamlandığı anlamına gelmez.
+
+Ana yönetici araştırmanın hedefini, önceliklerini, yeni görevlerini ve ilan hakkındaki kararlarını yönetmelidir. Her ham bulguyu ana yöneticinin modeline yeniden yazdırmak maliyet, gecikme ve tek noktada tıkanma yaratır. Operatörler de ortak ilan satırını serbestçe değiştirmemelidir. Yazma işlemini yetki ve şema denetleyen **tek kayıt servisi** yapmalıdır; ilk Mac sürümünde bu ayrı bir sunucu değil, aynı uygulama içindeki normal bir Python modülü olabilir.
+
+| Kayıt | Kim üretir? | Nasıl kaydedilir? |
+|---|---|---|
+| Kaynak gözlemi: ilan metni, fiyat, koordinat, yanıt | Kaynağa erişen operatör/araç | Kayıt servisi, kaynak zamanı ve kanıt referansıyla değişmez bir gözlem ekler |
+| Normalleştirilmiş alan: TL, m², koordinat sistemi | Statik dönüştürücü/doğrulayıcı | Kaynak gözlemine bağlı, sürümlü alan kaydı; çelişki eski veriyi ezmez |
+| Karar: ek inceleme, adaylık, sonraki görev | Ana yönetici + bağlayıcı politika kontrolleri | Kanıt kimliklerine dayanan ayrı karar kaydı |
+| Dış işlem: satıcı mesajı, dashboard yayını | Yetkili yürütücü | Mesaj politikası, tekilleştirme ve teslimat kaydıyla kontrollü çıkış |
+
+İlan ayrıntısı okuma akışı: operatör aracı çağırır → çalışma motoru sonucu kayıt servisine verir → gözlem ve `observation.recorded` teslim kaydı aynı veritabanı işleminde oluşur → olay ana yönetici kuyruğuna gelir → yönetici kayıt kimliklerini ve kısa özeti okuyup sonraki işi seçer. Yönetici çalışmıyorsa olay bekler; gözlem kaybolmaz. Olay yeniden teslim edilirse aynı görev iki kez oluşturulmaz. Ham kanıtın tamamını her model çağrısına kopyalamak gerekmez.
+
+Zamanlayıcı, önceden tanımlanmış rutin bir işi doğrudan operatöre verebilir; her sabah aynı aramayı başlatmak için yöneticiye model çağrısı yaptırmak gerekmez. Böyle bir görevin sonucunun da yöneticiyi uyandırması gerekir. **Mevcut eksik:** `_wake_parent` yalnız devredilmiş alt görevin üst görevini uyandırır. Zamanlayıcının doğrudan oluşturduğu, üst görevi olmayan işin sonucu otomatik olarak genel olay aboneliğine teslim edilmez. `publish` ile dış olay teslimi vardır; tamamlanmış görevden bu teslimata dayanıklı bağ henüz yoktur.
+
+Diğer sınırlar: “araştırma agent'ı” karar/değerlendirme rolüyle sınırlandırılmalı; rota, rakım ve eşik kontrolü gibi belirli hesaplar statik araçlarda kalmalıdır. Browser bağlantısı ile onun sunduğu `search/read/send` işlemleri ayrıdır; tek Browser yetkisi sınırsız gezinme veya mesaj gönderme izni olmamalıdır. Mevcut `effect=write` kapısı bütün yazmaları mesaj politikası olmadığı için durdurur; gelecekte yerel gözlem kaydı, dış mesaj ve yayın yetkileri ayrı etkiler ve kurallarla tanımlanmalıdır. Yerel bulgu kaydı bir satıcı mesajıyla aynı onay yoluna sokulmamalıdır.
 
 ## Ürün hedefi: n8n tarzı görsel otomasyon stüdyosu
 

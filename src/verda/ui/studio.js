@@ -1,7 +1,47 @@
 /* Interactive inspection canvas. Moving nodes only changes this browser view. */
-let studioMode = 'topology', studioSelection = 'agent:sahibinden', studioTrace = '', studioCamera = null;
+let studioMode = 'topology', studioSelection = 'agent:sahibinden', studioTrace = '', studioCamera = null, studioDetailed = false;
 const studioPositions = new Map();
 let studioCleanup = () => {};
+
+function studioIcon(kind) {
+  const paths={
+    agent:['M12 3v3','M9 3h6','M6 7h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z','M4 12H2m18 0h2','M8 12h.01M16 12h.01','M9 16h6'],
+    clock:['M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z','M12 7v5l3 2'],
+    browser:['M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z','M3 9h18','M6 6.5h.01m3 0h.01m3 0h.01'],
+    code:['m8 7-5 5 5 5m8-10 5 5-5 5','m14 4-4 16'],
+    mcp:['m8 8 8 8m-4-12 8 8-8 8','m8 4-4 4 12 12'],
+    map:['m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z','M9 3v15m6-12v15'],
+    layers:['m12 3 10 6-10 6L2 9Z','m2 13 10 6 10-6','m2 17 10 6 10-6'],
+    parcel:['M3 4h18v16H3Z','m3 13 7-4 6 6 5-3','M10 9V4m6 11v5'],
+    tool:['M14 6a4 4 0 0 0-5 5L3 17a2 2 0 0 0 3 3l6-6a4 4 0 0 0 5-5l-3 2-3-3Z'],
+    event:['m13 2-8 12h6l-1 8 9-13h-7Z'],
+    search:['M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z','m15 15 6 6'],
+    listing:['M5 3h14v18H5Z','M8 7h8m-8 4h8m-8 4h5'],
+    send:['m3 3 19 9-19 9 4-9Z','M7 12h15'],
+    reply:['M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8l-6 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z','M7 8h10m-10 4h7'],
+  };
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  for(const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'1.65','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(key,value);
+  svg.classList.add('studio-icon');
+  for(const d of paths[kind] || paths.tool){const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',d);svg.append(path);}
+  return svg;
+}
+function studioAction(t) {
+  const actions={
+    'sahibinden.search':{label:'İlan ara',icon:'search',description:'Bölge ve arama kriterlerine göre ilanları bul.'},
+    'sahibinden.read_listing':{label:'İlan ayrıntısı oku',icon:'listing',description:'Seçilen ilanın fiyat, alan ve açıklama bilgilerini al.'},
+    'sahibinden.send_message':{label:'İlana mesaj gönder',icon:'send',description:'Seçilen ilan için verilen mesajı gönderim kuralları içinde ilet.'},
+    'sahibinden.read_thread':{label:'İlan yanıtlarını oku',icon:'reply',description:'Seçilen ilanla ilgili konuşmayı ve gelen yanıtları oku.'},
+  };
+  return actions[t.key] || {label:t.label,icon:t.transport==='python'||t.transport==='script'?'code':'tool',description:t.description};
+}
+function capabilityButton(cap, select, cls='studio-link capability-link') {
+  const b=studioButton('',()=>select('capability:'+cap.id),cls), label=e('span',undefined,'capability-text');
+  label.append(e('strong',cap.label),e('small',cap.tools.length+' görev türü'));
+  b.append(studioIcon(cap.icon),label);
+  b.setAttribute('aria-label',cap.label+' · '+agent(cap.agent)+' · '+cap.tools.length+' görev türünü gör');
+  return b;
+}
 
 function studioButton(label, action, cls = 'studio-link') {
   const b = e('button', label, cls); b.type = 'button'; b.onclick = action; return b;
@@ -77,7 +117,10 @@ function renderStudio(root) {
     picker.value = studioTrace;
     picker.onchange = () => { studioTrace = picker.value; studioSelection = ''; studioCamera = null; render(); };
     toolbar.append(picker);
-  } else toolbar.append(e('span', 'Kayıtlı tetikleyiciler → agent’lar → araçlar → kaynaklar', 'studio-caption'));
+  } else {
+    toolbar.append(e('span', 'Araç ikonuna tıkla → verilebilecek görevleri gör', 'studio-caption'));
+    toolbar.append(studioButton(studioDetailed?'Agent görünümü':'Ayrıntılı araç ağı',()=>{studioDetailed=!studioDetailed;studioCamera=null;render();},'zoom-button'));
+  }
   const controls = e('div', undefined, 'studio-controls'); toolbar.append(controls);
   const layout = e('div', undefined, 'studio-layout');
   const viewport = e('div', undefined, 'studio-viewport'); viewport.tabIndex = 0; viewport.setAttribute('aria-label', 'Agent bağlantı tuvali');
@@ -86,12 +129,12 @@ function renderStudio(root) {
   world.append(svg); viewport.append(world);
   const panel = e('aside', undefined, 'studio-inspector'); panel.setAttribute('aria-label', 'Seçili düğüm ayrıntıları');
   const legend = e('div', undefined, 'studio-legend');
-  const legendItems = studioMode === 'topology' ? [['trigger','Görev oluşturur'],['delegate','Görev verebilir'],['tool','Araç yetkisi'],['resource','Ortak kaynak']] : [['trigger','Görev oluştu'],['delegated','Devredildi'],['executed','Araç çağrıldı'],['returned','Sonuç döndü']];
+  const legendItems = studioMode === 'topology' ? [['trigger','Görev oluşturur'],['delegate','Görev verebilir'],...(studioDetailed?[['tool','Araç yetkisi'],['resource','Ortak kaynak']]:[])] : [['trigger','Görev oluştu'],['delegated','Devredildi'],['executed','Araç çağrıldı'],['returned','Sonuç döndü']];
   legendItems.forEach(([kind,label]) => legend.append(e('span', label, 'legend-' + kind)));
   const note = e('p', studioMode === 'topology' ? 'Bağlar tanımlı yetki ve hedefleri gösterir. Düğüme tıkla; boşluğu sürükleyerek gezin. Düğümleri taşıyabilirsin.' : 'Bağlar kaydedilmiş işlemleri gösterir. Göreve tıklayarak devredilen girdiyi ve sonucu incele.' + (data.events_truncated ? ' Son 1.000 olay gösterildiği için eski çağrı ve dönüşler eksik olabilir.' : ''), 'studio-help');
   layout.append(viewport, panel); shell.append(toolbar, legend, layout, note); root.append(shell);
-  const graph = studioMode === 'topology' ? VerdaGraph.topology(data) : VerdaGraph.run(data, studioTrace);
-  const graphKey = studioMode + ':' + studioTrace;
+  const graph = studioMode === 'topology' ? (studioDetailed?VerdaGraph.topology(data):VerdaGraph.agentNetwork(data)) : VerdaGraph.run(data, studioTrace);
+  const graphKey = studioMode + ':' + studioDetailed + ':' + studioTrace;
   graph.nodes.forEach(n => { const pos = studioPositions.get(graphKey + ':' + n.id); if (pos) Object.assign(n, pos); });
   const nodes = new Map(graph.nodes.map(n => [n.id, n]));
   const buttons = new Map(); let gesture = null, suppressClick = false, disposed = false;
@@ -127,7 +170,8 @@ function renderStudio(root) {
     graph.edges.forEach(edge => {
       const from = nodes.get(edge.from), to = nodes.get(edge.to); if (!from || !to) return;
       const group = document.createElementNS(svg.namespaceURI, 'g'); group.classList.add('edge-group');
-      const highlighted = edge.from === studioSelection || edge.to === studioSelection;
+      const selectedNode=studioSelection.startsWith('capability:')?'agent:'+studioSelection.split(':')[1]:studioSelection;
+      const highlighted = edge.from === selectedNode || edge.to === selectedNode;
       if (highlighted) group.classList.add('highlighted');
       if (edge.inactive) group.classList.add('inactive');
       const path = document.createElementNS(svg.namespaceURI, 'path'); path.classList.add('edge-path','edge-' + edge.kind);
@@ -163,7 +207,11 @@ function renderStudio(root) {
   }
   function inspect(id) {
     studioSelection = id;
-    buttons.forEach((b, key) => { b.classList.toggle('selected', key === id); b.setAttribute('aria-pressed', String(key === id)); });
+    const selectedNode=id.startsWith('capability:')?'agent:'+id.split(':')[1]:id;
+    buttons.forEach((b, key) => {
+      b.classList.toggle('selected',key===selectedNode);
+      (b.matches('button')?b:b.querySelector('.node-main')).setAttribute('aria-pressed',String(key===selectedNode));
+    });
     drawEdges(); panel.replaceChildren(); panel.scrollTop = 0;
     const entry = nodes.get(id);
     if (id.startsWith('task:')) {
@@ -174,12 +222,26 @@ function renderStudio(root) {
       }
     }
     const [kind, ...parts] = id.split(':'), key = parts.join(':');
-    if (kind === 'agent') {
+    if (kind === 'capability') {
+      const owner=key.split(':')[0], cap=VerdaGraph.capabilities(data,owner).find(c=>c.id===key);if(!cap)return;
+      const heading=e('div',undefined,'capability-heading');heading.append(studioIcon(cap.icon),e('h2',cap.label));
+      panel.append(e('p','ARAÇ / YETKİNLİK','eyebrow'),heading,studioButton('← '+agent(owner),()=>inspect('agent:'+owner)));
+      const connection=data.connections.find(c=>c.key===cap.connectionKey);
+      if(connection)panel.append(e('p',connection.note,'inspector-note'));
+      const tasks=studioSection('Verilebilecek görevler · '+cap.tools.length);
+      cap.tools.forEach(t=>{
+        const action=studioAction(t), button=studioButton('',()=>inspect('tool:'+t.key),'studio-link capability-action');
+        const text=e('span');text.append(e('strong',action.label),e('small',action.description),e('small',t.status_label));
+        button.append(studioIcon(action.icon),text);tasks.append(button);
+      });panel.append(tasks);
+      panel.append(e('p','Bu liste agent’ın tanımlı yetkilerini gösterir. Göreve tıklayarak gerekli girdiyi ve bağlantı durumunu inceleyebilirsin.','muted'));
+      if(cap.icon==='browser')panel.append(e('p','Browser oturumu bağlanınca bu işler aynı kaynak kuyruğunu ve istek sınırını paylaşacak.','muted'));
+    } else if (kind === 'agent') {
       const a = data.agents.find(a => a.key === key); if (!a) return;
       panel.append(e('p','AGENT','eyebrow'),e('h2',a.label),e('p',a.description),chips([a.model.provider,a.model.model || 'Varsayılan model','Prompt v' + a.version]));
       const prompt = studioSection('Kalıcı yönerge / system prompt'); prompt.append(e('pre',a.prompt,'inspector-prompt')); panel.append(prompt);
-      const tools = studioSection('Kullanabildiği araçlar · ' + a.tools.length);
-      a.tools.forEach(key => { const t = data.tools.find(t => t.key === key); tools.append(studioButton(t.label + ' · ' + t.status_label, () => inspect('tool:' + key))); });
+      const tools = studioSection('Kullanabildiği araçlar');
+      VerdaGraph.capabilities(data,key).forEach(cap=>tools.append(capabilityButton(cap,inspect)));
       if (!a.tools.length) tools.append(e('p','Atanmış araç yok.','muted')); panel.append(tools);
       const triggers = studioSection('Bu agent’ı tetikleyen kayıtlar');
       data.triggers.filter(t => t.spec.agent === key).forEach(t => triggers.append(studioButton((t.enabled ? 'Etkin' : 'Pasif') + ' · ' + t.key, () => inspect('trigger:' + t.key))));
@@ -198,10 +260,16 @@ function renderStudio(root) {
       panel.append(e('p',t.kind === 'timer' ? 'ZAMANLAYICI' : 'OLAY TETİKLEYİCİSİ','eyebrow'),e('h2',t.key),triggerInspector(t,inspect));
     } else if (kind === 'tool') {
       const t = data.tools.find(t => t.key === key); if (!t) return;
-      panel.append(e('p','ARAÇ','eyebrow'),toolDetail(t));
+      const action=studioAction(t), heading=e('div',undefined,'capability-heading');heading.append(studioIcon(action.icon),e('h2',action.label));
+      panel.append(e('p','GÖREV TÜRÜ / ARAÇ İŞLEMİ','eyebrow'),heading,e('p',action.description));
+      const required=t.input_schema.required||[], props=t.input_schema.properties||{};
+      const labels={listing_id:'İlan numarası',query:'Arama kriterleri',text:'Gönderilecek mesaj',parcel_key:'Ada / parsel kimliği',price_tl:'Fiyat (TL)',area_m2:'Alan (m²)'};
+      panel.append(studioFields(Object.keys(props).map(k=>[labels[k]||k,required.includes(k)?'Gerekli':'İsteğe bağlı'])));
+      panel.append(toolDetail(t));
       panel.append(studioFields([['Çalıştırıcı',transports[t.transport]],['Süre sınırı', ['script','mcp'].includes(t.transport) ? VerdaGraph.duration(t.timeout_seconds) : 'Bu adaptörde uygulanmış toplam süre sınırı yok']]));
       const usedBy=studioSection('Bu aracı kullanabilen agent’lar');
       data.agents.filter(a=>a.tools.includes(key)).forEach(a=>usedBy.append(studioButton(a.label,()=>inspect('agent:'+a.key)))); panel.append(usedBy);
+      data.agents.filter(a=>a.tools.includes(key)).forEach(a=>{const cap=VerdaGraph.capabilities(data,a.key).find(c=>c.tools.some(t=>t.key===key));if(cap)panel.append(capabilityButton(cap,inspect));});
       if(t.resource) panel.append(studioButton('Kaynak bağlantısı → '+t.resource,()=>inspect('connection:'+t.resource)));
     } else if (kind === 'connection') {
       const c=data.connections.find(c=>c.key===key); if(!c)return;
@@ -219,22 +287,41 @@ function renderStudio(root) {
     } else panel.append(e('h2','Bir düğüm seç'),e('p','Agent’ın prompt ve araçlarını, zamanlayıcının saat ve görevini sağ panelden incele.'));
   }
   for (const n of graph.nodes) {
-    const b=e('button',undefined,'studio-node node-'+n.kind); b.type='button'; b.dataset.nodeId=n.id;
+    const rich=n.kind==='agent' && studioMode==='topology' && !studioDetailed;
+    const b=e(rich?'div':'button',undefined,'studio-node node-'+n.kind+(rich?' agent-card':''));
+    if(!rich)b.type='button';b.dataset.nodeId=n.id;
     let type='', subtitle='', status='';
-    if(n.kind==='agent'){const a=data.agents.find(a=>a.key===n.key);type='AGENT';subtitle=a.model.provider+' · '+a.tools.length+' araç';status=count(a.key,c=>!terminal.has(c.state))+' açık görev';}
-    if(n.kind==='trigger'){const t=data.triggers.find(t=>t.key===n.key);type=t.kind==='timer'?'◷ ZAMANLAYICI':'↯ OLAY';subtitle=t.kind==='timer'?'Her '+VerdaGraph.timerDetails(t).interval+' · '+VerdaGraph.timerDetails(t).clock:t.spec.event_type;status=(t.enabled?'Etkin':'Pasif')+(t.spec.mode==='synthetic'?' · ÖRNEK':'');}
+    if(n.kind==='agent'){const a=data.agents.find(a=>a.key===n.key);type='AGENT';subtitle=a.model.provider+' · prompt v'+a.version;status=count(a.key,c=>!terminal.has(c.state))+' açık görev';}
+    if(n.kind==='trigger'){const t=data.triggers.find(t=>t.key===n.key);type=t.kind==='timer'?'ZAMANLAYICI':'OLAY';subtitle=t.kind==='timer'?'Her '+VerdaGraph.timerDetails(t).interval+' · '+VerdaGraph.timerDetails(t).clock:t.spec.event_type;status=(t.enabled?'Etkin':'Pasif')+(t.spec.mode==='synthetic'?' · ÖRNEK':'');}
     if(n.kind==='tool'){const t=data.tools.find(t=>t.key===n.key);type=transports[t.transport];subtitle=t.status_label;}
     if(n.kind==='connection'){const c=data.connections.find(c=>c.key===n.key);type=c.kind==='browser'?'BROWSER':'KAYNAK';subtitle=c.kind==='browser'?'Henüz bağlı değil':'Paylaşılan kaynak kuyruğu';}
     if(n.kind==='task'){const t=data.tasks.find(t=>t.id===n.key);type=t.executor_tool?'STATİK GÖREV':'AGENT GÖREVİ';subtitle=states[t.state]||t.state;status=(t.listing_ref||'İlan bağı yok')+(t.mode==='synthetic'?' · ÖRNEK':'');}
     if(n.kind==='call'){type='ARAÇ ÇAĞRISI';subtitle=n.finish ? (states[n.finish.data.state]||n.finish.data.state) : 'Sonuç kaydı yok';}
     if(n.kind==='source'){type='TETİKLEME';subtitle='Kaydedilmiş görev girdisi';}
-    b.append(e('small',type),e('strong',n.label),e('span',subtitle)); if(status)b.append(e('span',status,'node-status'));
-    b.setAttribute('aria-label',n.label+' · '+type+' · '+subtitle+(status?' · '+status:''));
+    let icon='tool';
+    if(n.kind==='agent'||n.kind==='task')icon='agent';
+    if(n.kind==='trigger')icon=data.triggers.find(t=>t.key===n.key).kind==='timer'?'clock':'event';
+    if(n.kind==='source')icon='event';
+    if(n.kind==='connection')icon=data.connections.find(c=>c.key===n.key).kind==='browser'?'browser':'layers';
+    if(n.kind==='tool')icon=studioAction(data.tools.find(t=>t.key===n.key)).icon;
+    if(n.kind==='task'&&data.tasks.find(t=>t.id===n.key).executor_tool)icon='code';
+    const main=rich?e('button',undefined,'node-main'):b;
+    if(rich)main.type='button';
+    const heading=e('div',undefined,'node-heading'), caption=e('div');
+    caption.append(e('small',type),e('strong',n.label));heading.append(studioIcon(icon),caption);
+    main.append(heading,e('span',subtitle));if(status)main.append(e('span',status,'node-status'));
+    main.setAttribute('aria-label',n.label+' · '+type+' · '+subtitle+(status?' · '+status:''));
+    if(rich){
+      const capabilities=e('div',undefined,'node-capabilities');
+      n.capabilities.forEach(cap=>capabilities.append(capabilityButton(cap,inspect,'node-capability')));
+      b.append(main,e('small','KULLANABİLDİĞİ ARAÇLAR','node-tools-label'),capabilities);
+      if(!n.capabilities.length)capabilities.append(e('span','Atanmış araç yok.'));
+    }
     b.style.left=n.x+'px';b.style.top=n.y+'px';b.style.width=n.width+'px';b.style.height=n.height+'px';
-    b.onclick=()=>{if(suppressClick){suppressClick=false;return;}inspect(n.id);};world.append(b);buttons.set(n.id,b);
+    main.onclick=()=>{if(suppressClick){suppressClick=false;return;}inspect(n.id);};world.append(b);buttons.set(n.id,b);
   }
   viewport.addEventListener('pointerdown',event=>{
-    if(event.button!==0)return; const target=event.target.closest('.studio-node');
+    if(event.button!==0 || event.target.closest('.node-capability'))return; const target=event.target.closest('.studio-node');
     gesture={x:event.clientX,y:event.clientY,cx:camera.x,cy:camera.y,node:target?nodes.get(target.dataset.nodeId):null,moved:false};
     if(gesture.node){gesture.nx=gesture.node.x;gesture.ny=gesture.node.y;}
     viewport.setPointerCapture(event.pointerId);

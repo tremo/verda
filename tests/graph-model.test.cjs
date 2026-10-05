@@ -35,6 +35,30 @@ test('timer interval is not a duration limit and zero timestamps are valid', () 
   assert.match(details.next,/1970/);
 });
 
+test('capability grouping never expands an agent grant or claims a browser session is ready', () => {
+  const data={...config,connections:[{key:'sahibinden',kind:'browser',label:'Browser',session_status:'unconnected'}]};
+  const browser=globalThis.VerdaGraph.capabilities(data,'sahibinden');
+  assert.equal(browser.length,1);
+  assert.equal(browser[0].icon,'browser');
+  assert.deepEqual(browser[0].tools.map(t=>t.key),config.agents.find(a=>a.key==='sahibinden').tools);
+  assert(!browser[0].tools.some(t=>t.available===true));
+  const limited={...data,agents:data.agents.map(a=>a.key==='sahibinden'?{...a,tools:['sahibinden.read_listing']}:a)};
+  assert.equal(globalThis.VerdaGraph.capabilities(limited,'sahibinden')[0].tools.length,1);
+  assert.equal(globalThis.VerdaGraph.capabilities(data,'manager')[0].icon,'code');
+});
+
+test('agent overview keeps trigger and delegation edges while nesting granted tools in larger cards', () => {
+  const data={...config,triggers:[{key:'morning',kind:'timer',enabled:0,spec:{agent:'sahibinden'}}],connections:[{key:'sahibinden',kind:'browser',label:'Browser'}]};
+  const graph=globalThis.VerdaGraph.agentNetwork(data);
+  assert.equal(graph.nodes.length,5);
+  assert.equal(graph.edges.length,4);
+  assert(graph.nodes.filter(n=>n.kind==='agent').every(n=>n.width>210&&n.height>80));
+  const operator=graph.nodes.find(n=>n.key==='sahibinden');
+  assert.equal(operator.capabilities[0].tools.length,4);
+  const ids=new Set(graph.nodes.map(n=>n.id));
+  assert(graph.edges.every(e=>ids.has(e.from)&&ids.has(e.to)));
+});
+
 test('execution graph isolates a trace and only shows evidenced calls and returns', () => {
   const data={...config,tasks:[
     {id:'parent',agent:'manager',trace_id:'one',created_at:1,source:'user'},

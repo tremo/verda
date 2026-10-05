@@ -2,6 +2,45 @@
 (function (root) {
   const WIDTH = 210, HEIGHT = 80;
   const node = (id, kind, key, label, x, y, extra = {}) => ({id, kind, key, label, x, y, width:WIDTH, height:HEIGHT, ...extra});
+  function capabilities(data, agentKey) {
+    const a=data.agents.find(a=>a.key===agentKey), groups=new Map();
+    if(!a)return [];
+    for(const key of a.tools){
+      const t=data.tools.find(t=>t.key===key);if(!t)continue;
+      const connection=(data.connections||[]).find(c=>c.key===t.resource);
+      let group, label, icon;
+      if(connection?.kind==='browser'){group='resource/'+t.resource;label='Browser';icon='browser';}
+      else if(t.transport==='python'){group='python';label='Hesaplama';icon='code';}
+      else if(t.transport==='script'){group='script/'+t.key;label='Script';icon='code';}
+      else if(t.transport==='mcp'){group='mcp/'+(t.resource||t.key);label='MCP';icon='mcp';}
+      else if(t.resource){
+        group='resource/'+t.resource;
+        const labels={tkgm:['TKGM','parcel'],geography:['Harita','map'],official_layers:['Katmanlar','layers']};
+        [label,icon]=labels[t.resource] || [connection?.label || t.resource,'tool'];
+      }else{group='tool/'+t.key;label=t.label;icon='tool';}
+      if(!groups.has(group))groups.set(group,{id:agentKey+':'+group,agent:agentKey,label,icon,connectionKey:connection?.key,tools:[]});
+      groups.get(group).tools.push(t);
+    }
+    return [...groups.values()];
+  }
+  function agentNetwork(data) {
+    const graph=topology(data), nodes=graph.nodes.filter(n=>['agent','trigger'].includes(n.kind));
+    const columns=[...new Set(nodes.filter(n=>n.kind==='agent').map(n=>n.x))].sort((a,b)=>a-b);
+    const columnNodes=columns.map(x=>nodes.filter(n=>n.kind==='agent'&&n.x===x));
+    columnNodes.forEach(group=>group.forEach(n=>{
+      n.capabilities=capabilities(data,n.key);n.width=316;n.height=174+Math.max(0,Math.ceil(n.capabilities.length/2)-1)*48;
+    }));
+    const height=Math.max(600,...columnNodes.map(group=>group.reduce((h,n)=>h+n.height+35,0)+40),data.triggers.length*155+80);
+    columnNodes.forEach((group,column)=>{
+      let y=(height-group.reduce((h,n)=>h+n.height,0)-(group.length-1)*35)/2;
+      group.forEach(n=>{n.x=310+column*450;n.y=y;y+=n.height+35;});
+    });
+    nodes.filter(n=>n.kind==='trigger').forEach((n,i)=>{
+      const t=data.triggers.find(t=>t.key===n.key), target=nodes.find(n=>n.id==='agent:'+t.spec.agent);
+      n.width=230;n.height=115;n.x=0;n.y=data.triggers.length===1&&target?target.y+25:50+i*155;
+    });
+    return {nodes,edges:graph.edges.filter(e=>['trigger','delegate'].includes(e.kind))};
+  }
   function topology(data) {
     const nodes = [], edges = [], agents = new Map(data.agents.map(a => [a.key, a]));
     const incoming = new Set(data.agents.flatMap(a => a.delegates));
@@ -83,5 +122,5 @@
       hasDurationLimit:false,
     };
   }
-  root.VerdaGraph = {topology, run, duration, timerDetails};
+  root.VerdaGraph = {topology, agentNetwork, capabilities, run, duration, timerDetails};
 })(globalThis);

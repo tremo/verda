@@ -10,7 +10,8 @@ const terminal = new Set(['complete', 'cancelled', 'failed']);
 const states = {queued:'Sırada', waiting_browser:'Tarayıcı işlemi bekliyor', running:'Çalışıyor', complete:'Tamamlandı', blocked:'Engel / bağlantı bekliyor', waiting_children:'Alt görev sonucu bekliyor', waiting_user:'Kullanıcı girdisi bekliyor', uncertain:'Sonuç belirsiz · tekrar yok', failed:'Başarısız', cancelled:'İptal'};
 const kinds = {task_submitted:'Görev kuyruğa alındı', turn_started:'Agent görevi aldı', decision:'Bir sonraki işlem seçildi', delegated:'Başka agent’a görev verildi', tool_started:'Araç çağrıldı', tool_finished:'Araç sonucu alındı', tool_deferred:'Kaynak sırası bekleniyor', task_complete:'Görev tamamlandı', child_result_received:'Alt görev sonucu geldi', child_needs_attention:'Alt görevde engel var', task_blocked:'Görev durdu', task_waiting_user:'Kullanıcı girdisi gerekiyor', resumed:'Kullanıcı girdisiyle devam etti', worker_lost:'Çalışan kesildi'};
 Object.assign(kinds, {browser_queued:'Tarayıcı işi kuyruğa alındı',browser_claimed:'Tarayıcı oturumu işi aldı',observation_recorded:'Bulgu ortak kayda yazıldı',outcome_recorded:'Sonuç ortak kayda yazıldı',record_delivered:'Sonuç kuyruğa teslim edildi',record_read:'Kaydedilmiş kanıt okundu'});
-const transports = {browser:'Codex · Chrome kuyruğu', python:'Statik kod · Python', script:'Statik script', mcp:'MCP aracı', unconnected:'Kaynak adaptörü'};
+const transports = {browser:'Tarayıcı kuyruğu · Codex / Jev', python:'Statik kod · Python', script:'Statik script', mcp:'MCP aracı', unconnected:'Kaynak adaptörü'};
+Object.assign(kinds,{browser_progress:'Tarayıcı motoru adımı'});
 const agent = key => data.agents.find(a => a.key === key)?.label || key;
 const tool = key => data.tools.find(t => t.key === key)?.label || key;
 const stamp = x => new Date(x * 1000).toLocaleString('tr-TR');
@@ -46,7 +47,7 @@ function runtimeStatus() {
   bar.replaceChildren();
   const local = data.workers.filter(w => w.mode === 'local' && w.active);
   const synthetic = data.workers.filter(w => w.mode === 'synthetic' && w.active);
-  const items = [['Yerel panel', 'Açık', true], ['Görev yürütücüsü', local.length ? 'Aktif bildirim var' : 'Aktif bildirim yok', !!local.length], ['Browser', data.browser?.active ? 'Codex · Chrome bağlı' : 'Codex oturumu bekliyor', !!data.browser?.active], ['Kayıtlı görevler', data.total_tasks + ' · ' + count(null, c => !terminal.has(c.state)) + ' açık', true]];
+  const items = [['Yerel panel', 'Açık', true], ['Görev yürütücüsü', local.length ? 'Aktif bildirim var' : 'Aktif bildirim yok', !!local.length], ['Browser', (data.browser?.label||'Chrome')+(data.browser?.active?' · Bağlı':' · Bağlantı bekliyor'), !!data.browser?.active], ['Kayıtlı görevler', data.total_tasks + ' · ' + count(null, c => !terminal.has(c.state)) + ' açık', true]];
   items.forEach(([label, value, ready]) => {
     const n = e('div', undefined, 'runtime-item ' + (ready ? 'ready' : 'pending'));
     n.append(e('small', label), e('strong', value)); bar.append(n);
@@ -88,6 +89,7 @@ function taskDetail(t) {
 function toolDetail(t) {
   const n = card(t.label);
   n.append(chips([transports[t.transport], t.status_label, t.effect === 'write' ? 'Yazma işlemi' : 'Okuma / hesaplama']), e('p', t.description));
+  if(t.transport==='browser'){const b=e('button','Tarayıcı motoru: '+data.browser.label,'refresh');b.onclick=()=>{view='browser';render();};n.append(b);}
   n.append(e('p', 'Yetkili agent’lar: ' + data.agents.filter(a => a.tools.includes(t.key)).map(a => a.label).join(', '), 'muted'));
   if (t.implementation.entrypoint) n.append(e('p', 'Çalışan kod: ' + t.implementation.entrypoint, 'implementation'));
   if (t.implementation.script_name) n.append(e('p', 'Script: ' + t.implementation.script_name, 'implementation'));
@@ -187,7 +189,7 @@ function render() {
   studioCleanup();
   document.body.classList.toggle('studio-view', view === 'studio');
   runtimeStatus(); const nav = $('views'); nav.replaceChildren();
-  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['records','Ortak kayıtlar'], ['research','İlanlar ve eksikler'], ['events','Bildirimler ve hatalar'], ['tools','Tüm araçlar ve scriptler'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
+  [['studio','Akış tuvali'], ['agents','Agent listesi'], ['trace','Görev kayıtları'], ['records','Ortak kayıtlar'], ['research','İlanlar ve eksikler'], ['events','Bildirimler ve hatalar'], ['tools','Tüm araçlar ve scriptler'], ['browser','Tarayıcı bağlantısı'], ['triggers','Tetikleyiciler']].forEach(([key,label]) => {
     const b = e('button', label, 'tab' + (view === key ? ' selected' : '')); b.onclick = () => { view = key; taskId = null; render(); }; nav.append(b);
   });
   const root = $('content'); root.replaceChildren();
@@ -198,6 +200,7 @@ function render() {
   if (view === 'records') renderRecords(root);
   if (view === 'events') renderEventCenter(root);
   if (view === 'research') renderResearch(root);
+  if (view === 'browser') renderBrowser(root);
   if (view === 'tools') {
     const scripts = data.tools.filter(t => t.transport === 'script');
     root.append(e('p', scripts.length + ' bağımsız script · ' + data.tools.filter(t => t.transport === 'python').length + ' statik Python aracı · ' + data.tools.filter(t => t.transport === 'mcp').length + ' MCP aracı tanımlı.', 'statusline'));

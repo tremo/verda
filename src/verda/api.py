@@ -5,6 +5,7 @@ import sqlite3
 import time
 import threading
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, RedirectResponse
@@ -56,6 +57,11 @@ class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     request_key: str = Field(min_length=1, max_length=128)
     listing_id: str | None = Field(default=None, max_length=100)
+
+
+class BrowserDriverRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    driver: Literal['codex', 'jev']
 
 
 def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None, runtime=None,
@@ -122,6 +128,18 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
             raise HTTPException(503, 'Agency not configured')
         from verda.agency.research import audit
         return audit(agency_store, offset=offset, limit=limit)
+
+    @app.put('/control/private/browser', dependencies=[Depends(editor)])
+    def select_browser(command: BrowserDriverRequest):
+        if agency_store is None:
+            raise HTTPException(503, 'Agency not configured')
+        from verda.agency.browser import BrowserBridge
+        bridge = BrowserBridge(agency_store)
+        try:
+            bridge.select(command.driver)
+        except ValueError as error:
+            raise HTTPException(409, str(error))
+        return bridge.overview()
 
     @app.post('/control/private/research/review', dependencies=[Depends(editor)])
     def review_research(command: ReviewRequest):

@@ -236,7 +236,7 @@ function renderStudio(root) {
         button.append(studioIcon(action.icon),text);tasks.append(button);
       });panel.append(tasks);
       panel.append(e('p','Bu liste agent’ın tanımlı yetkilerini gösterir. Göreve tıklayarak gerekli girdiyi ve bağlantı durumunu inceleyebilirsin.','muted'));
-      if(cap.icon==='browser')panel.append(e('p','Okuma işleri Codex tarayıcı kuyruğuna gider. Aynı kaynak kilidi ve istek aralığını paylaşır; gönderim bağlı değildir.','muted'));
+      if(cap.icon==='browser'){panel.append(e('p','Okuma işleri seçili tarayıcı motoruna gider. Aynı kaynak kilidi ve istek aralığını paylaşır; gönderim bağlı değildir.','muted'));panel.append(studioButton('Tarayıcı motoru: '+data.browser.label,()=>{view='browser';render();}));}
     } else if (kind === 'record') {
       recordInspector(panel,'outcome',key);
     } else if (kind === 'service') {

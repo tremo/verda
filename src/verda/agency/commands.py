@@ -17,9 +17,13 @@ def add_commands(parser, commands):
     commands.add_parser('agency-init')
     commands.add_parser('agency-status')
     browser = commands.add_parser('agency-browser')
-    browser.add_argument('action', choices=['attach','detach','claim','finish','status'])
+    browser.add_argument('action', choices=['attach','detach','claim','finish','status','select'])
+    browser.add_argument('--driver', choices=['codex','jev'], default='codex')
     browser.add_argument('--worker', default='codex-chrome')
     browser.add_argument('--file', type=Path)
+    jev = commands.add_parser('agency-jev-worker')
+    jev.add_argument('--env-file', type=Path)
+    jev.add_argument('--continuous', action='store_true')
     subscription=commands.add_parser('agency-subscription')
     subscription.add_argument('file',type=Path)
     resolve=commands.add_parser('agency-source-resume')
@@ -57,11 +61,18 @@ def run(args):
     if args.database.startswith('sqlite:///'):
         store.archive_path = Path(args.database[len('sqlite:///'):])
     command = args.command
+    if command == 'agency-jev-worker':
+        from verda.agency.jev import run_worker
+        return run_worker(store, env_file=args.env_file, continuous=args.continuous)
     if command == 'agency-browser':
         from verda.agency.browser import BrowserBridge
         bridge = BrowserBridge(store)
         if args.action == 'attach':
+            if args.driver != 'codex':
+                raise ValueError('Jev bağlantısını agency-jev-worker doğrular; elle bağlı işaretlenemez.')
             bridge.attach(args.worker)
+        elif args.action == 'select':
+            bridge.select(args.driver)
         elif args.action == 'detach':
             bridge.detach(args.worker)
         elif args.action == 'claim':

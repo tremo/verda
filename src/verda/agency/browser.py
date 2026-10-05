@@ -13,6 +13,7 @@ from verda.legacy import canonical, digest
 
 READ_TOOLS = {'sahibinden.search', 'sahibinden.read_listing'}
 BLOCKERS = {'captcha', 'rate_limited', 'access_denied', 'session_lost'}
+DRIVERS = {'codex': 'Codex · Chrome', 'jev': 'Browser Use · Jev Ultrafast'}
 
 
 def source_url(value):
@@ -71,13 +72,21 @@ class BrowserBridge:
     def __init__(self, store):
         self.store = store
 
-    def attach(self, worker, label='Codex · Mac Chrome', now=None):
+    def select(self, driver):
+        if driver not in DRIVERS:
+            raise ValueError('Unknown browser driver')
+        with self.store.transaction() as con:
+            if con.execute("SELECT 1 FROM browser_jobs WHERE state IN ('queued','running')").fetchone():
+                raise ValueError('Bekleyen tarayıcı işleri varken motor değiştirilemez.')
+            con.execute('UPDATE browser_config SET driver=? WHERE id=1', (driver,))
+
+    def attach(self, worker, label='Codex · Mac Chrome', now=None, *, driver='codex', ttl=600):
         now = time.time() if now is None else now
-        if not worker or len(worker) > 100 or len(label) > 200:
+        if driver not in DRIVERS or not worker or len(worker) > 100 or len(label) > 200 or not 1 <= ttl <= 600:
             raise ValueError('Invalid browser driver')
         with self.store.transaction() as con:
-            con.execute('INSERT INTO browser_sessions VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET label=excluded.label,seen_at=excluded.seen_at,expires_at=excluded.expires_at',
-                        (worker, label, now, now + 600))
+            con.execute('INSERT INTO browser_sessions(id,label,seen_at,expires_at,driver) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET label=excluded.label,seen_at=excluded.seen_at,expires_at=excluded.expires_at,driver=excluded.driver',
+                        (worker, label, now, now + ttl, driver))
 
     def detach(self, worker):
         with self.store.transaction() as con:
@@ -86,12 +95,17 @@ class BrowserBridge:
     def overview(self, now=None):
         now = time.time() if now is None else now
         with self.store.transaction() as con:
+            selected = con.execute('SELECT driver FROM browser_config WHERE id=1').fetchone()[0]
             sessions = [dict(r) for r in con.execute('SELECT * FROM browser_sessions ORDER BY seen_at DESC LIMIT 10')]
-            jobs = [{k: r[k] for k in ('id', 'task_id', 'tool', 'state', 'created_at', 'finished_at')}
+            jobs = [{k: r[k] for k in ('id', 'task_id', 'tool', 'driver', 'state', 'created_at', 'finished_at')}
                     for r in con.execute('SELECT * FROM browser_jobs ORDER BY created_at DESC LIMIT 50')]
-        return {'kind': 'codex_browser_bridge', 'active': any(s['expires_at'] > now for s in sessions),
+        from verda.agency.jev import installation_status
+        return {'kind': 'browser_job_bridge', 'selected_driver': selected, 'label': DRIVERS[selected],
+                'drivers': [{'key': k, 'label': v} for k, v in DRIVERS.items()], 'jev': installation_status(self.store),
+                'active': any(s['expires_at'] > now and s['driver'] == selected for s in sessions),
                 'sessions': sessions, 'jobs': jobs, 'read_tools': sorted(READ_TOOLS),
-                'note': 'Mevcut Codex tarayıcı oturumu üzerinden çalışır. Oturum kapalıyken işler kuyrukta bekler. Mesaj gönderme bağlı değil.'}
+                'note': ('Jev yerel yürütücüsü Browser Harness ile Chrome’a bağlanır. Yürütücü veya bağlantı yokken işler kuyrukta bekler. ' if selected == 'jev' else
+                         'Mevcut Codex tarayıcı oturumu üzerinden çalışır. Oturum kapalıyken işler kuyrukta bekler. ') + 'Mesaj gönderme bağlı değil.'}
 
     def enqueue(self, task, tool, call_id, now=None):
         now = time.time() if now is None else now
@@ -102,10 +116,11 @@ class BrowserBridge:
             call = con.execute("SELECT * FROM tool_calls WHERE id=? AND task_id=? AND state='started'", (call_id, task['id'])).fetchone()
             if not call:
                 raise ValueError('Tool receipt missing')
-            con.execute("INSERT INTO browser_jobs(id,task_id,tool,arguments,state,created_at) VALUES(?,?,?,?,'queued',?)",
-                        (call_id, task['id'], tool.key, call['arguments'], now))
+            driver = con.execute('SELECT driver FROM browser_config WHERE id=1').fetchone()[0]
+            con.execute("INSERT INTO browser_jobs(id,task_id,tool,arguments,state,created_at,driver) VALUES(?,?,?,?,'queued',?,?)",
+                        (call_id, task['id'], tool.key, call['arguments'], now, driver))
             con.execute("UPDATE inbox SET state='waiting_browser',reason='browser_driver_wait',token=NULL,lease_until=NULL WHERE id=?", (task['id'],))
-            self.store._event(con, task, 'browser_queued', {'call_id': call_id, 'tool': tool.key}, now)
+            self.store._event(con, task, 'browser_queued', {'call_id': call_id, 'tool': tool.key, 'driver': driver}, now)
 
     def claim(self, worker, now=None):
         now = time.time() if now is None else now
@@ -116,15 +131,29 @@ class BrowserBridge:
             # Expired claims are not replayed: the browser may already have navigated.
             if con.execute("SELECT 1 FROM browser_jobs WHERE state='running'").fetchone():
                 return None
-            job = con.execute("SELECT * FROM browser_jobs WHERE state='queued' ORDER BY created_at,id LIMIT 1").fetchone()
+            job = con.execute("SELECT * FROM browser_jobs WHERE state='queued' AND driver=? ORDER BY created_at,id LIMIT 1", (session['driver'],)).fetchone()
             if not job:
                 return None
             task = con.execute('SELECT * FROM inbox WHERE id=?', (job['task_id'],)).fetchone()
+            resource = con.execute("SELECT halted FROM resources WHERE key='sahibinden'").fetchone()
+            if task['state'] != 'waiting_browser' or (resource and resource['halted']):
+                return None
             token = uuid4().hex
             con.execute("UPDATE browser_jobs SET state='running',worker=?,token=?,lease_until=? WHERE id=?", (worker, token, now + 600, job['id']))
             self.store._event(con, task, 'browser_claimed', {'call_id': job['id'], 'worker': worker}, now)
             return {'id': job['id'], 'task_id': task['id'], 'tool': job['tool'], 'arguments': json.loads(job['arguments']),
-                    'token': token, 'objective': task['objective'], 'listing_ref': task['listing_ref']}
+                    'token': token, 'driver': job['driver'], 'objective': task['objective'], 'listing_ref': task['listing_ref']}
+
+    def progress(self, job, worker, phase, *, now=None):
+        if phase not in {'connected', 'observed', 'SCROLL_DOWN', 'SCROLL_UP', 'WAIT', 'DONE', 'BLOCKED', 'verified', 'model_failed', 'read_failed'}:
+            raise ValueError('Invalid browser progress')
+        now = time.time() if now is None else now
+        with self.store.transaction() as con:
+            owned = con.execute("SELECT * FROM browser_jobs WHERE id=? AND worker=? AND token=? AND state='running' AND lease_until>?", (job['id'], worker, job['token'], now)).fetchone()
+            if not owned:
+                raise ValueError('Browser job is not owned')
+            task = con.execute('SELECT * FROM inbox WHERE id=?', (owned['task_id'],)).fetchone()
+            self.store._event(con, task, 'browser_progress', {'call_id': job['id'], 'driver': owned['driver'], 'phase': phase}, now)
 
     def finish(self, job_id, worker, token, *, result=None, error=None, now=None):
         now = time.time() if now is None else now
@@ -160,7 +189,7 @@ class BrowserBridge:
                     result = Listing.model_validate(result).model_dump()
                     if result['listing_id'] != args['listing_id']:
                         raise ValueError('Wrong listing receipt')
-                result = {**result, 'browser_driver': 'codex_chrome', 'captured_at': now, 'synthetic': False}
+                result = {**result, 'browser_driver': 'jev_ultrafast' if job['driver'] == 'jev' else 'codex_chrome', 'captured_at': now, 'synthetic': False}
                 if len(canonical(result).encode()) > 32768:
                     raise ValueError('Browser result is too large')
             task = dict(con.execute('SELECT * FROM inbox WHERE id=?', (job['task_id'],)).fetchone())

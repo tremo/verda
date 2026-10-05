@@ -1,6 +1,6 @@
 # Codex / Chrome okuma sürücüsü
 
-Verda'nın model worker'ı tarayıcı araçlarını doğrudan çalıştırmaz. `transport: browser` bir kalıcı iş üretir; **aktif Codex görevi**, kullanıcının yetkilendirdiği computer-use bağlantısıyla bu işi yürütür. Bu sürüm gözetimsiz, sürekli çalışan bir tarayıcı servisi değildir. Mesaj gönderme ve konuşma okuma kapsam dışıdır.
+Verda'nın model worker'ı tarayıcı araçlarını doğrudan çalıştırmaz. `transport: browser` bir kalıcı iş üretir; **aktif Codex görevi**, kullanıcının yetkilendirdiği computer-use bağlantısıyla bu işi yürütür. Codex sürücüsü gözetimsiz çalışmaz. Ayrı sürekli yerel yürütücü olan [Jev Ultrafast sürücüsü](JEV-ULTRAFAST.md) aynı sözleşmeyi kullanır. Mesaj gönderme ve konuşma okuma kapsam dışıdır.
 
 ## Yaşam döngüsü
 

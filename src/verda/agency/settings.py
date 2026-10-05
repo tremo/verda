@@ -28,6 +28,15 @@ def effective_agent(con, base):
     return base.model_copy(update={k: value[k] for k in ('prompt', 'description', 'version')})
 
 
+def migrate_v7(con):
+    for table in ('browser_jobs','browser_sessions'):
+        if 'driver' not in {r['name'] for r in con.execute('PRAGMA table_info('+table+')')}:
+            con.execute("ALTER TABLE "+table+" ADD COLUMN driver TEXT NOT NULL DEFAULT 'codex'")
+    con.execute("CREATE TABLE IF NOT EXISTS browser_config(id INTEGER PRIMARY KEY CHECK(id=1), driver TEXT NOT NULL)")
+    con.execute("INSERT OR IGNORE INTO browser_config VALUES(1,'codex')")
+    con.execute('UPDATE agency_meta SET version=7')
+
+
 def agent_view(con, base):
     agent = effective_agent(con, base)
     return {**agent.model_dump(mode='json'), 'edit_revision': digest(agent.model_dump(mode='json'))}

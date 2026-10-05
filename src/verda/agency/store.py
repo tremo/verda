@@ -12,7 +12,7 @@ from verda.legacy import canonical, digest
 from verda.agency.registry import AgencyConfig
 from verda.agency.records import RecordService, OUTCOME_STATES
 from verda.agency.events import EventBus, migrate_v5, DELIVERY_DELAYS, READ_DELAYS
-from verda.agency.settings import migrate_v6, effective_agent
+from verda.agency.settings import migrate_v6, migrate_v7, effective_agent
 
 TERMINAL = {'complete', 'cancelled', 'failed'}
 
@@ -46,7 +46,7 @@ class AgencyStore:
         with self.transaction() as con:
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if tables:
-                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3, 4, 5, 6}:
+                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3, 4, 5, 6, 7}:
                     raise ValueError('Foreign agency database')
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 1:
                     con.execute('ALTER TABLE inbox ADD COLUMN executor_tool TEXT')
@@ -63,6 +63,8 @@ class AgencyStore:
                     migrate_v5(con)
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 5:
                     migrate_v6(con)
+                if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 6:
+                    migrate_v7(con)
                 return
             for sql in [
                 'CREATE TABLE agency_meta(version INTEGER PRIMARY KEY)', 'INSERT INTO agency_meta VALUES(4)',
@@ -92,6 +94,7 @@ class AgencyStore:
             self.records.install(con)
             migrate_v5(con)
             migrate_v6(con)
+            migrate_v7(con)
 
     def worker_status(self, worker_id, mode, state, *, now=None):
         if mode not in {'local', 'synthetic'} or state not in {'processing', 'idle', 'stopped'}:

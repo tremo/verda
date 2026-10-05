@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+jev = ["jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast.git@1231850a0bf1a0c0341fe408ef1668dbbfdfac46"]
 postgres = ["psycopg[binary]>=3.3.6,<4"]
 test = ["pytest>=9.1.1,<10", "httpx>=0.28.1,<1"]
 
@@ -27,7 +28,7 @@ verda = "verda.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-verda = ["ui/*.html", "ui/*.css", "ui/*.js", "agency/*.json"]
+verda = ["ui/*.html", "ui/*.css", "ui/*.js", "agency/*.json", "agency/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

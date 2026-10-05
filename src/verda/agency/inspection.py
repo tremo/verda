@@ -8,7 +8,7 @@ def tool_description(registry, tool):
         status, label = 'ready', 'Hazır · yerel kod'
         implementation = {'kind': 'python', 'entrypoint': handler.__module__ + '.' + handler.__name__}
     elif tool.transport == 'browser':
-        status, label = 'configured', 'Codex tarayıcı kuyruğu · okuma'
+        status, label = 'configured', 'Tarayıcı kuyruğu · Codex / Jev · okuma'
         implementation = {'kind': 'browser'}
     elif tool.transport in {'script', 'mcp'}:
         status, label = 'configured', 'Tanımlı · bağlantı doğrulanmadı'
@@ -20,7 +20,8 @@ def tool_description(registry, tool):
         implementation = {'kind': 'unconnected'}
     if tool.effect == 'write':
         status, label = 'policy_missing', 'Gönderim politikası hazır değil'
-    return {**tool.model_dump(exclude={'command', 'server_url'}), 'status': status, 'status_label': label,
+    description = tool.description.replace('Codex tarayıcı sürücüsü yokken', 'Seçili tarayıcı sürücüsü yokken')
+    return {**tool.model_dump(exclude={'command', 'server_url'}), 'description': description, 'status': status, 'status_label': label,
             'implementation': implementation, 'available': registry.available(tool.key)}
 
 

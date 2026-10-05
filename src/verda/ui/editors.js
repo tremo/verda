@@ -1,4 +1,30 @@
 /* Local management controls. Source text is always rendered as text, never HTML. */
+function renderBrowser(root){
+  const browser=data.browser, panel=card('Tarayıcı motoru');
+  panel.append(e('p','Sahibinden operatörü aynı arama ve ilan okuma araçlarını kullanır. Bu seçim, yeni tarayıcı işlerini hangi motorun yürüteceğini belirler. Ana yönetici ve agent modelleri değişmez.'));
+  const label=e('label','Yeni işler için motor'), select=e('select');select.setAttribute('aria-label','Tarayıcı motoru');
+  for(const driver of browser.drivers)select.append(new Option(driver.label,driver.key));select.value=browser.selected_driver;label.append(select);
+  const save=e('button','Motor seçimini kaydet','refresh'), status=e('p','','muted');status.setAttribute('role','status');
+  save.onclick=async()=>{
+    save.disabled=true;
+    try{
+      const response=await fetch('/control/private/browser',{method:'PUT',headers:{'Content-Type':'application/json','X-Verda-CSRF':data.csrf_token},body:JSON.stringify({driver:select.value})});
+      const result=await response.json();if(!response.ok)throw Error(typeof result.detail==='string'?result.detail:'Motor seçilemedi.');
+      data.browser=result;render();
+    }catch(error){status.textContent=error.message;}finally{save.disabled=false;}
+  };
+  panel.append(label,save,status,e('p',browser.note,'muted'));root.append(panel);
+  const jev=card('Browser Use · Jev Ultrafast'), info=browser.jev;
+  const reasons={package_missing:'Paket kurulumu gerekiyor',typesafe_key_missing:'TypeSafe anahtarının yerel dosyadan bağlanması gerekiyor',chrome_connection_missing:'Browser Harness ile Chrome bağlantısı gerekiyor'};
+  jev.append(chips([info.installed?'Paket kurulu':'Sabitlenmiş paket kurulumu gerekiyor',info.version?'Sürüm '+info.version:'Kurulu sürüm yok']),e('p',info.scope));
+  if(info.last_check)jev.append(e('p','Son bağlantı kontrolü: '+(reasons[info.last_check.reason]||'Bağlantı doğrulandı')+' · '+stamp(info.last_check.checked_at)));
+  jev.append(e('p','Jev kararları TypeSafe ile çalışır. Anahtarlar yerel dosyadan yalnız yürütücüye yüklenir. Codex hesabın ana yönetici ve operatör modelleri için kullanılmaya devam eder.'));
+  jev.append(e('p','Tek tarayıcı işi · işler arasında en az 180 saniye · en fazla 12 Jev kararı / iş · CAPTCHA ve erişim engelinde durur. Kurulu olması bağlantının açık olduğu anlamına gelmez.','muted'));
+  root.append(jev);
+  const jobs=card('Tarayıcı işleri');
+  for(const job of browser.jobs){const task=data.tasks.find(t=>t.id===job.task_id);const row=e('button',(job.driver==='jev'?'Jev Ultrafast':'Codex Chrome')+' · '+tool(job.tool)+' · '+(states[job.state]||job.state),'task-row');row.onclick=()=>{if(task)showTask(task);};jobs.append(row);}root.append(jobs);
+}
+
 function promptEditor(a) {
   const box=e('div',undefined,'prompt-editor');
   const descLabel=e('label','Görev açıklaması'), desc=e('textarea');

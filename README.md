@@ -39,11 +39,15 @@ Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` d
 
 - **Agent:** Sorumluluk alanı, yönergesi, model profili, araç yetkileri, delegasyon hedefleri ve gelen işler kuyruğu olan yürütücü. Sürekli açık bir model konuşması değildir; kayıtlı bağlamla uyanır.
 - **Görev:** Bir agent'a atanmış hedef; girdisi, önceliği, ilan ilişkisi, kaynağı ve durumu vardır. “Doğal sit kontrolü” bir görevdir.
-- **Araç:** İş yapan fonksiyon, script, kaynak adaptörü veya MCP çağrısıdır. “Doğal sit katmanını sorgula” aracı araştırma agent'ının kullanımına verilebilir.
+- **Araç:** İş yapan fonksiyon, script, kaynak adaptörü veya MCP çağrısıdır. Sit durumunu öğrenme görevinde Sahibinden operatörü “Konuşma okuma” ve “Mesaj gönderme” araçlarını kullanır.
 - **Tetikleyici:** Zaman, kullanıcı isteği, dış olay veya başka agent'ın delegasyonu; görev oluşturur. Kendisi agent değildir.
 - **İlan:** Görevlerin üzerinde çalıştığı dosyadır. Aynı ilan birçok agent'a; bir agent aynı anda birçok ilanın sıradaki görevlerine bağlı olabilir.
 
 Yeni merkezde dört başlangıç rolü vardır: ana yönetici, Sahibinden operatörü, parsel operatörü ve araştırma agent'ı. Roller Python enum'uyla sınırlandırılmaz. Yeni bir rol yapılandırmaya eklenebilir. Önceki yedi rolün kataloğu `/control/legacy-definitions`, sabit dokuz görevli örnek ve eski ilan geçmişi `/control/flows` altında tarihsel inceleme için kalır; bunlar yeni çalışma modelini temsil etmez.
+
+**İlk sürümün sit kuralı:** Yönetici işi Sahibinden operatörüne verir. Operatör önce mevcut yazışmayı okur; açık bir yanıt yoksa “Taşınmazda doğal veya arkeolojik sit durumu var mı?” diye mesajla sorar. Satıcı genel sit sorusuna açıkça “yok” derse sit açısından yeterli kabul edilir; ek resmî sorgu beklenmez. Sonuç **“Satıcı beyanına göre sit yok”** olarak kaydedilir. Soru, yanıtın aynen metni, ilan/konuşma/mesaj referansı ve varsa mesaj tarihi korunur; bu kayıt resmî doğrulama sayılmaz. Yalnız bir sit türüne verilen yanıt diğer türe genellenmez. Cevap yoksa veya belirsizse durum bilinmiyor kalır; çelişkili yanıtlar yöneticinin değerlendirmesine gider. “Sit var” yanıtında yalnız belirtilen tür ve derece kaydedilir.
+
+Bu kural yönetici, Sahibinden ve araştırma agent'larının sürümlü prompt'larında bulunur ve panelden görülebilir. Bağlantısız sit katmanı araçları varsayılan kayıttan çıkarıldı; ileride bir sorgu yöntemi bağlanırsa araç olarak eklenebilir. Mesaj adaptörü ve gönderim politikası henüz bağlı olmadığından bu değişiklik tek başına canlı mesaj gönderimini başlatmaz. Ortak kayıt servisi gelecekteki konuşma aracı çıktısını ve agent yorumunu ayrı saklar; eski kayıtların doğrulama etiketleri geriye dönük değiştirilmez.
 
 Ana görünüm **Akış tuvali**dir. Büyük agent kartlarının içinde araç ikonları bulunur; agent ve zamanlayıcı kendi simgeleriyle ayrılır. Sahibinden operatöründeki **Browser** ikonuna tıklanınca yalnız o agent'ın yetkili olduğu görev türleri açılır: ilan arama, ilan ayrıntısı okuma, mesaj gönderme, yanıt okuma. İşleme tıklanınca gerekli girdiler ve bağlantı durumu görülür. Browser, bu işlemlerin paylaştığı yetkinlik/oturum grubudur; bir ikonun görünmesi oturumun bağlandığı anlamına gelmez. Python, script ve MCP araçları da gruplanır; bu gruplama çalışma yetkilerini genişletmez.
 

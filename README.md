@@ -41,6 +41,16 @@ Sahibinden bölümünde tek seçilmiş Mac tarayıcı oturumu hedefi ve başlang
 
 `/control` ve `/control/catalog` yalnız uygulama tanımlarını sunar; gerçek ilan, yazışma veya erişim anahtarı içermez ve model çağırmaz. Özel veri API’leri Bearer korumasını sürdürür. Sunucu loopback üzerinde çalışır, beklenmeyen Host başlıklarını reddeder. Bu ekranı olduğu gibi internete açmak desteklenmez.
 
+### İlan akışları
+
+`/control/flows` ekranında ilan seçimi, eski araştırma geçmişi ve varsa ilana bağlı V2 araştırmaları bulunur. Agent düğümünü seçince aldığı girdi, ürettiği sonuç, sonraki işler, bekleme nedeni, deneme sayısı ve olay geçmişi görünür. Dallanan görevler aynı grafikte gösterilir. Düz çizgi kaydedilmiş veri aktarımını, kesik çizgi yalnız plan bağımlılığını gösterir.
+
+Görev sahiplenildiğinde çalışana verilen bağımlılık sonuçlarının o andaki kopyası olay kaydına yazılır. Sonradan güncel sonuçlardan geçmiş girdi uydurulmaz. Önceki sürümdeki çalışmalar ve eski araştırma arşivi bu kayıtları içermiyorsa ekran bunu açıkça belirtir. Bu görünüm işlem kayıtlarını gösterir; modelin iç düşünce sürecini göstermez. Model/prompt sürümü kaydedilmemişse bilinmiyor olarak kalır.
+
+Gerçek geçmiş özeldir. `verda serve`, `.local/viewer-link` dosyasına yalnız dosya sahibinin okuyabildiği bir bağlantı yazar. Sunucuyu başlattıktan sonra bu bağlantıyı aynı Mac'in tarayıcısında açın: 10 dakika geçerli tek kullanımlık bağlantı, dört saatlik salt okunur oturum açar. Sonra `/control/flows` kullanılabilir. Sunucu yeniden başladığında yeni bağlantı gerekir. Bağlantıyı paylaşmayın. Tarayıcı oturumu kuyruk oluşturma, iptal veya diğer yazma işlemleri için yetki vermez; mevcut API Bearer koruması devam eder. Yanıtlar önbelleğe alınmaz.
+
+“Örnek V2 akışları” yalnız sentetik çalışmaları listeler. Gerçek ilana otomatik olarak demo bağlanmaz. Canlı kaynak adaptörleri henüz tamamlanmadığından gerçek ilanların eski olayları görülebilir, ancak bunlar yeni agent akışı gibi sunulmaz. Yeni bir sentetik örnek `verda demo-run --request-key example-trace` ile oluşturulabilir. Ekran Yenile düğmesiyle güncellenir; otomatik canlı takip henüz yoktur. Mevcut GitHub Pages dashboard'ı değiştirilmez.
+
 Başlıca okumalar:
 
 ```text

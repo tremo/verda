@@ -214,7 +214,9 @@ class WorkflowStore:
                     lease_token=?,lease_until=?,worker_id=?,reason=NULL WHERE id=?""",
                     (token, now + lease_seconds, worker_id, task["id"]))
                 self._event(con, task["run_id"], task["id"], now, "task_claimed",
-                            {"step": task["step_key"], "attempt": task["attempts"] + 1})
+                            {"step": task["step_key"], "attempt": task["attempts"] + 1,
+                             "worker_id": worker_id,
+                             "input_snapshot": {row["step_key"]: json.loads(row["result"]) for row in dependencies}})
                 return Claim(task["id"], task["run_id"], task["step_key"], task["agent"], task["action"], mode,
                              token, task["attempts"] + 1,
                              {row["step_key"]: json.loads(row["result"]) for row in dependencies})
@@ -298,11 +300,15 @@ class WorkflowStore:
             if run is None:
                 raise KeyError(run_id)
             tasks = [dict(row) for row in con.execute("SELECT * FROM workflow_tasks WHERE run_id=? ORDER BY ordinal", (run_id,))]
+            claims = {}
+            for row in con.execute("SELECT task_id,at,details FROM workflow_events WHERE run_id=? AND kind='task_claimed' ORDER BY id", (run_id,)):
+                claims[row["task_id"]] = {"at": row["at"], **json.loads(row["details"])}
             by_key = {t["step_key"]: t for t in tasks}
             for task in tasks:
                 task["dependencies"] = json.loads(task["dependencies"])
                 task["waiting_on"] = [key for key in task["dependencies"] if by_key[key]["state"] != "succeeded"]
                 task["result"] = json.loads(task["result"]) if task["result"] else None
+                task["last_claim"] = claims.get(task["id"])
                 del task["lease_token"]
             states = {task["state"] for task in tasks}
             status = ("cancelled" if run["cancelled"] else "failed" if "failed" in states else
@@ -315,5 +321,25 @@ class WorkflowStore:
                     "mode": run["mode"], "status": status, "tasks": tasks, "events": events,
                     "has_more_events": len(rows) > limit,
                     "next_after_event_id": events[-1]["id"] if events else after_event_id}
+        finally:
+            con.close()
+
+    def list_runs(self, *, case_ref: str | None = None, mode: str | None = None, limit: int = 50) -> list[dict]:
+        if not 1 <= limit <= 100 or mode not in {None, "demo", "shadow"}:
+            raise ValueError("Invalid run query")
+        con = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            where, values = [], []
+            if case_ref is not None:
+                where.append("case_ref=?")
+                values.append(case_ref)
+            if mode is not None:
+                where.append("mode=?")
+                values.append(mode)
+            sql = "SELECT id,case_ref,source_revision,mode,created_at FROM workflow_runs"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            return [dict(row) for row in con.execute(sql + " ORDER BY created_at DESC,id DESC LIMIT ?", (*values, limit))]
         finally:
             con.close()

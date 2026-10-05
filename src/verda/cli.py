@@ -41,6 +41,7 @@ def main():
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--token-file", type=Path, default=Path(".local/api-token"))
+    serve.add_argument("--viewer-link-file", type=Path, default=Path(".local/viewer-link"))
     args = parser.parse_args()
     if args.command in {"runtime-info", "manager-demo"}:
         from verda.runtime import Runtime, RuntimeConfig, manager_preview
@@ -107,7 +108,13 @@ def main():
                 raise ValueError("Run verda init before serving workflows")
             from verda.runtime import Runtime, RuntimeConfig
             runtime = Runtime(RuntimeConfig.load(args.runtime_config))
-            uvicorn.run(create_app(engine, token, workflow_store, runtime), host="127.0.0.1", port=args.port,
+            nonce = secrets.token_urlsafe(32)
+            args.viewer_link_file.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(args.viewer_link_file, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w") as link_file:
+                link_file.write(f"http://127.0.0.1:{args.port}/control/unlock/{nonce}")
+            uvicorn.run(create_app(engine, token, workflow_store, runtime, viewer_nonce=nonce), host="127.0.0.1", port=args.port,
                         access_log=False, log_level="warning")
             return
         print(json.dumps(result, ensure_ascii=False, indent=2))

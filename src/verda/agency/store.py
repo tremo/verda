@@ -41,14 +41,17 @@ class AgencyStore:
         with self.transaction() as con:
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if tables:
-                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2}:
+                if 'agency_meta' not in tables or con.execute('SELECT version FROM agency_meta').fetchone()[0] not in {1, 2, 3}:
                     raise ValueError('Foreign agency database')
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 1:
                     con.execute('ALTER TABLE inbox ADD COLUMN executor_tool TEXT')
                     con.execute('UPDATE agency_meta SET version=2')
+                if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 2:
+                    con.execute('CREATE TABLE workers(id TEXT PRIMARY KEY, mode TEXT NOT NULL, state TEXT NOT NULL, seen_at REAL NOT NULL, expires_at REAL NOT NULL)')
+                    con.execute('UPDATE agency_meta SET version=3')
                 return
             for sql in [
-                'CREATE TABLE agency_meta(version INTEGER PRIMARY KEY)', 'INSERT INTO agency_meta VALUES(2)',
+                'CREATE TABLE agency_meta(version INTEGER PRIMARY KEY)', 'INSERT INTO agency_meta VALUES(3)',
                 '''CREATE TABLE inbox(id TEXT PRIMARY KEY, request_key TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL,
                 agent TEXT NOT NULL, objective TEXT NOT NULL, inputs TEXT NOT NULL, listing_ref TEXT, trace_id TEXT NOT NULL,
                 parent_id TEXT REFERENCES inbox(id), source TEXT NOT NULL, mode TEXT NOT NULL, priority INTEGER NOT NULL,
@@ -68,8 +71,19 @@ class AgencyStore:
                 '''CREATE TABLE triggers(key TEXT PRIMARY KEY, kind TEXT NOT NULL, spec TEXT NOT NULL,
                 next_at REAL, enabled INTEGER NOT NULL DEFAULT 1)''',
                 'CREATE TABLE incoming_events(key TEXT PRIMARY KEY, body_hash TEXT NOT NULL)',
+                'CREATE TABLE workers(id TEXT PRIMARY KEY, mode TEXT NOT NULL, state TEXT NOT NULL, seen_at REAL NOT NULL, expires_at REAL NOT NULL)',
             ]:
                 con.execute(sql)
+
+    def worker_status(self, worker_id, mode, state, *, now=None):
+        if mode not in {'local', 'synthetic'} or state not in {'processing', 'idle', 'stopped'}:
+            raise ValueError('Invalid worker status')
+        now = time.time() if now is None else now
+        ttl = 600 if state == 'processing' else 15 if state == 'idle' else 0
+        with self.transaction() as con:
+            con.execute("""INSERT INTO workers VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                mode=excluded.mode,state=excluded.state,seen_at=excluded.seen_at,expires_at=excluded.expires_at""",
+                        (worker_id, mode, state, now, now + ttl))
 
     @staticmethod
     def _event(con, task, kind, data, now):
@@ -274,6 +288,8 @@ class AgencyStore:
                 if value is not None:
                     where.append(name + '=?'); params.append(value)
             query = 'SELECT * FROM inbox' + (' WHERE ' + ' AND '.join(where) if where else '')
+            total = con.execute('SELECT count(*) FROM (' + query + ')', params).fetchone()[0]
+            counts = [dict(r) for r in con.execute('SELECT agent,state,mode,count(*) AS count FROM (' + query + ') GROUP BY agent,state,mode', params)]
             tasks = []
             for row in con.execute(query + ' ORDER BY created_at DESC,id DESC LIMIT 200', params):
                 t = dict(row)
@@ -282,13 +298,18 @@ class AgencyStore:
                 t.pop('token'); t.pop('request_hash')
                 tasks.append(t)
             ids = [t['id'] for t in tasks]
-            events = []
+            events, more_events = [], False
             if ids:
-                rows = con.execute('SELECT * FROM agency_events WHERE task_id IN (' + ','.join('?' for _ in ids) + ') ORDER BY id DESC LIMIT 1000', ids)
-                events = [{**dict(r), 'data': json.loads(r['data'])} for r in rows][::-1]
+                rows = con.execute('SELECT * FROM agency_events WHERE task_id IN (' + ','.join('?' for _ in ids) + ') ORDER BY id DESC LIMIT 1001', ids).fetchall()
+                more_events = len(rows) > 1000
+                events = [{**dict(r), 'data': json.loads(r['data'])} for r in rows[:1000]][::-1]
             return {'tasks': tasks, 'events': events, 'resources': [dict(r) for r in con.execute('SELECT * FROM resources')],
                     'triggers': [{**dict(r), 'spec': json.loads(r['spec'])} for r in con.execute('SELECT * FROM triggers')],
-                    'limits': {'tasks': 200, 'events': 1000}, 'config_revision': self.config.revision}
+                    'limits': {'tasks': 200, 'events': 1000}, 'total_tasks': total, 'task_counts': counts,
+                    'tasks_truncated': total > len(tasks), 'events_truncated': more_events,
+                    'workers': [{**dict(r), 'active': r['state'] != 'stopped' and r['expires_at'] > time.time()}
+                                for r in con.execute('SELECT * FROM workers ORDER BY seen_at DESC LIMIT 20')],
+                    'config_revision': self.config.revision}
         finally:
             con.close()
 

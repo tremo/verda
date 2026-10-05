@@ -64,9 +64,12 @@ def run(args):
             inputs={'synthetic': True, 'listing_id': 'DEMO-101'}, listing_ref='DEMO-101',
             request_key=args.request_key or 'agency-demo:' + uuid4().hex, mode='synthetic')
         engine = AgentEngine(store, registry)
-        for _ in range(args.max_steps):
-            if not engine.step(mode='synthetic'):
-                break
+        try:
+            for _ in range(args.max_steps):
+                if not engine.step(mode='synthetic'):
+                    break
+        finally:
+            engine.close()
         result = store.overview()
         root = next(t for t in result['tasks'] if t['id'] == task)
         return {'task_id': task, 'state': root['state'], 'trace_id': root['trace_id'],
@@ -74,12 +77,15 @@ def run(args):
                 'provider': registry.agents['manager'].model.provider}
     engine = AgentEngine(store, default_registry(config))
     steps = 0
-    while args.continuous or steps < args.max_steps:
-        store.tick()
-        worked = engine.step(mode='local')
-        steps += 1
-        if not worked:
-            if not args.continuous:
-                break
-            time.sleep(1)
+    try:
+        while args.continuous or steps < args.max_steps:
+            store.tick()
+            worked = engine.step(mode='local')
+            steps += 1
+            if not worked:
+                if not args.continuous:
+                    break
+                time.sleep(1)
+    finally:
+        engine.close()
     return {'worker_iterations': steps}

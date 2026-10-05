@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,9 +35,22 @@ Aracın başarılı dönmesi tek başına kaynak verisinin doğruluğunu kanıtl
 class AgentEngine:
     def __init__(self, store: AgencyStore, registry: Registry, providers=None):
         self.store, self.registry = store, registry
+        self.worker_id = uuid4().hex
+        self.mode = 'local'
         self.providers = {'codex': CodexProvider()} if providers is None else dict(providers)
 
+    def close(self, *, now=None):
+        self.store.worker_status(self.worker_id, self.mode, 'stopped', now=now)
+
     def step(self, *, mode='local', now=None):
+        self.mode = mode
+        self.store.worker_status(self.worker_id, mode, 'processing', now=now)
+        try:
+            return self._step(mode=mode, now=now)
+        finally:
+            self.store.worker_status(self.worker_id, mode, 'idle', now=now)
+
+    def _step(self, *, mode='local', now=None):
         task = self.store.claim(mode=mode, now=now)
         if task is None:
             return False

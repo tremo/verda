@@ -268,3 +268,50 @@ def test_lost_child_worker_notifies_waiting_manager(tmp_path):
     awakened=s.claim(mode='local',now=604)
     assert awakened['id']==root
     assert next(t for t in s.overview()['tasks'] if t['id']==child['id'])['state']=='uncertain'
+
+
+def test_inspector_distinguishes_configured_tools_from_verified_code():
+    from verda.agency.inspection import tool_description
+    cfg = config()
+    script = cfg.tools[0].model_copy(update={'transport':'script','command':('/python','/private/test.py','--secret','not-for-ui')})
+    registry = Registry(cfg.model_copy(update={'tools':(script,)}))
+    description = tool_description(registry,script)
+    assert description['status'] == 'configured'
+    assert description['implementation']['script_name'] == 'test.py'
+    assert 'not-for-ui' not in json.dumps(description)
+    assert 'command' not in description
+    registry = Registry(cfg,{'test.read':lambda a:a})
+    assert tool_description(registry,cfg.tools[0])['status'] == 'ready'
+
+
+def test_worker_status_is_reported_and_expires(tmp_path,monkeypatch):
+    s,r=setup(tmp_path)
+    monkeypatch.setattr('verda.agency.store.time.time',lambda: 100)
+    engine=AgentEngine(s,r,providers={})
+    assert engine.step(now=100) is False
+    worker=s.overview()['workers'][0]
+    assert worker['active'] and worker['state']=='idle'
+    monkeypatch.setattr('verda.agency.store.time.time',lambda: 116)
+    assert s.overview()['workers'][0]['active'] is False
+    engine.close(now=116)
+    assert s.overview()['workers'][0]['state']=='stopped'
+
+
+def test_worker_migration_preserves_existing_tasks(tmp_path):
+    s,r=setup(tmp_path)
+    task=submit(s,now=0)
+    with s.transaction() as con:
+        con.execute('DROP TABLE workers')
+        con.execute('UPDATE agency_meta SET version=2')
+    s.initialize()
+    assert s.overview()['tasks'][0]['id']==task
+    assert s.overview()['workers']==[]
+
+
+def test_queue_counts_include_records_beyond_visible_page(tmp_path):
+    s,r=setup(tmp_path)
+    for n in range(201):submit(s,request_key=str(n),now=n)
+    v=s.overview()
+    assert v['total_tasks']==201 and len(v['tasks'])==200
+    assert v['tasks_truncated'] is True
+    assert sum(c['count'] for c in v['task_counts'])==201

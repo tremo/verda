@@ -45,7 +45,11 @@ Yerel adres `http://127.0.0.1:8765/health`. Veri API’leri `.local/api-token` d
 
 Yeni merkezde dört başlangıç rolü vardır: ana yönetici, Sahibinden operatörü, parsel operatörü ve araştırma agent'ı. Roller Python enum'uyla sınırlandırılmaz. Yeni bir rol yapılandırmaya eklenebilir. Önceki yedi rolün kataloğu `/control/legacy-definitions`, sabit dokuz görevli örnek ve eski ilan geçmişi `/control/flows` altında tarihsel inceleme için kalır; bunlar yeni çalışma modelini temsil etmez.
 
-Ekran agent kuyruğunu, gerçek yönergeyi, model tercihini, izinli araçları, delegasyonları, tetikleyicileri ve ilan bazında görev izini gösterir. Her görev satırında sorumlu agent vardır; araç çağrıları o görevin altında görünür. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz.
+Ekranda seçilen agent, izinli araç bağlantıları ve görev kuyruğu birlikte görünür. Araç kartı yerel Python kodunu, scripti, MCP kaydını ve henüz bağlanmamış adaptörü ayırır; yapılandırılmış bir script/MCP bağlantısı doğrulanmış gibi gösterilmez. Browser oturumunun durumu, paylaşılan kaynak, istek aralığı ve yazma politikası da görünür. Çizgiler araç yetkisini gösterir; bu görünüm düzenlenebilir akış tuvali değildir.
+
+Agent'ın gerçek yönergesi, model tercihi, delegasyon hedefleri, tetikleyicileri ve ilan bazında görev izi ayrı sekmelerde incelenebilir. Kuyruk bekleyen/çalışan ve tamamlanan işleri ayırır; her işin kaynağı, önceliği, girdisi, sonucu ve araç çağrıları görünür. Doğrudan statik araçla yürütülen görev “Model kullanmaz” olarak işaretlenir. Toplam sayaçlar bütün görevleri kapsar; listede son 200 görev, olaylarda son 1.000 kayıt sınırı ve kesilme uyarısı vardır.
+
+Üst durum kartları panelin açık olmasıyla görev yürütücüsünün çalışmasını ayırır. Worker bildirimi işlenirken en fazla 600 saniye, boşta 15 saniye geçerlidir; normal kapanışta durdu olarak kaydedilir. Bu gösterge işletim sistemi süreç denetimi değildir; ani kapanış son bildirim süresi dolana kadar görünmeyebilir. “Yenile” kayıtları tekrar okur; bu sayfa worker başlatmaz. Varsayılan kayıtta bir çalışır Python hesaplaması vardır; bağımsız script ve MCP aracı henüz eklenmemiştir.
 
 ## Ürün hedefi: n8n tarzı görsel otomasyon stüdyosu
 
@@ -119,7 +123,7 @@ Görevlerin sonucu doğrudan resmî kanıt veya uygunluk kararı sayılmaz. Alan
 
 ### Çalışan çekirdek
 
-Yeni durum `.local/agency.sqlite` dosyasındadır. Eski arşiv ve önceki workflow veritabanları aynen korunur. `agency-init` tekrar çalıştırılabilir; şema v1→v2 yükseltmesi işlemseldir. Yedeklerde üç veritabanı da bulunmalıdır.
+Yeni durum `.local/agency.sqlite` dosyasındadır. Eski arşiv ve önceki workflow veritabanları aynen korunur. `agency-init` tekrar çalıştırılabilir; şema v1→v2→v3 yükseltmesi işlemseldir. v3 görev yürütücüsü durum bildirimlerini ekler. Yedeklerde üç veritabanı da bulunmalıdır.
 
 - Kalıcı gelen işler kuyruğu, öncelik, atomik sahiplenme, agent başına tek karar turu.
 - Agent bazında sağlayıcı/model, sürümlü yönerge ve araç/delegasyon izinleri. Görev oluşurken tanımın kopyası ve yapılandırma özeti saklanır; çalışırken yapılandırma değişmişse sessizce farklı yetkiyle devam etmez.

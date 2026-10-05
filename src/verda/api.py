@@ -99,11 +99,12 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
         if agency_store is None:
             raise HTTPException(503, "Agent inbox storage is not configured")
         from verda.agency.engine import default_registry, PROTOCOL
+        from verda.agency.inspection import tool_description, connection_descriptions
         registry = default_registry(agency_store.config)
         return {**agency_store.overview(listing_ref=listing_ref, trace_id=trace_id),
                 "agents": [a.model_dump() for a in agency_store.config.agents],
-                "tools": [{**t.model_dump(exclude={"command", "server_url"}), "connected": registry.available(t.key)}
-                          for t in agency_store.config.tools],
+                "tools": [tool_description(registry, t) for t in agency_store.config.tools],
+                "connections": connection_descriptions(agency_store.config),
                 "live_source_adapters": False, "protocol_prompt": PROTOCOL}
 
     @app.get("/control/catalog")

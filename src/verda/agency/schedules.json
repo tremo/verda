@@ -1,0 +1,93 @@
+[
+  {
+    "key": "inbox-sync",
+    "kind": "timer",
+    "next_at": "2026-10-08T12:00:00+03:00",
+    "spec": {
+      "agent": "sahibinden",
+      "interval_seconds": 10800,
+      "mode": "local",
+      "priority": 30,
+      "objective": "Gelen kutusunu eşitle: değişen konuşmaları oku, satıcı yanıtlarından sit ve erişim olgularını öner.",
+      "inputs": {
+        "routine": "inbox_sync"
+      }
+    }
+  },
+  {
+    "key": "daily-scan",
+    "kind": "timer",
+    "next_at": "2026-10-09T09:00:00+03:00",
+    "spec": {
+      "agent": "sahibinden",
+      "interval_seconds": 86400,
+      "mode": "local",
+      "priority": 20,
+      "objective": "Günlük yeni ilan taraması: en yeni ilanları sayfa sayfa oku, yeni ve fiyatı veya alanı değişen ilanların detayını oku.",
+      "inputs": {
+        "routine": "daily_scan"
+      }
+    }
+  },
+  {
+    "key": "weekly-full-scan",
+    "kind": "timer",
+    "next_at": "2026-10-11T10:00:00+03:00",
+    "spec": {
+      "agent": "sahibinden",
+      "interval_seconds": 604800,
+      "mode": "local",
+      "priority": 10,
+      "objective": "Haftalık tam tarama: tüm sonuç sayfalarını oku, fiyatı veya alanı değişen ve yeni ilanların detayını oku.",
+      "inputs": {
+        "routine": "full_scan"
+      }
+    }
+  },
+  {
+    "key": "research-sweep",
+    "kind": "timer",
+    "next_at": "2026-10-08T14:30:00+03:00",
+    "spec": {
+      "agent": "manager",
+      "interval_seconds": 900,
+      "mode": "local",
+      "priority": 25,
+      "objective": "Araştırma süpürmesi: kural motorunun bekleyen işlerini operatörlere toplu devret.",
+      "inputs": {
+        "routine": "research_sweep"
+      },
+      "when": "work_waiting"
+    }
+  },
+  {
+    "key": "inbox-full-sync",
+    "kind": "timer",
+    "next_at": "2026-10-11T04:00:00+03:00",
+    "spec": {
+      "agent": "sahibinden",
+      "interval_seconds": 604800,
+      "mode": "local",
+      "priority": 10,
+      "objective": "Haftalık tam gelen kutusu taraması: listeyi sonuna kadar oku (depth=full), değişen konuşmaları oku.",
+      "inputs": {
+        "routine": "inbox_sync",
+        "depth": "full"
+      }
+    }
+  },
+  {
+    "key": "watchdog",
+    "kind": "timer",
+    "next_at": "2026-10-15T08:00:00+03:00",
+    "spec": {
+      "agent": "manager",
+      "interval_seconds": 900,
+      "mode": "local",
+      "priority": 40,
+      "objective": "Nöbetçi: sistemin değişmez kurallarını kayıtlardan kontrol et (kod, model çağrısı yok).",
+      "inputs": {},
+      "executor_tool": "watchdog.check"
+    }
+  }
+]

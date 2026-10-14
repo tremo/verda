@@ -215,6 +215,7 @@ def test_health_endpoint_still_responds_when_database_disappears(engine,tmp_path
 
 def test_database_failure_after_tool_does_not_repeat_external_operation(tmp_path,monkeypatch):
     store,registry=setup(tmp_path,supervisor=None);calls=[]
+    store._lost_read_retry=lambda con,task,now:False      # quarantine path: what a lost write (or an exhausted read) gets
     registry.handlers['test.read']=lambda args:calls.append(args) or {'ok':True}
     store.submit(agent='operator',objective='Read',inputs={'id':'one'},request_key='read',executor_tool='test.read',now=0)
     original=store.finish_tool

@@ -96,7 +96,7 @@ function toolDetail(t) {
   if (t.implementation.remote_name) n.append(e('p', 'MCP araç adı: ' + t.implementation.remote_name, 'implementation'));
   if (t.resource) {
     const resource = data.resources.find(r => r.key === t.resource);
-    n.append(e('p', 'Ortak kaynak: ' + t.resource + ' · En az ' + t.min_interval_seconds + ' saniye aralık', 'muted'));
+    n.append(e('p', 'Ortak kaynak: ' + t.resource + (t.max_interval_seconds > t.min_interval_seconds ? ' · ' + t.min_interval_seconds + '–' + t.max_interval_seconds + ' saniye rastgele aralık' : ' · En az ' + t.min_interval_seconds + ' saniye aralık'), 'muted'));
     if (resource?.halted) n.append(e('p', 'Kaynak durduruldu: ' + resource.halted, 'empty'));
     if (resource?.next_at > Date.now() / 1000) n.append(e('p', 'Sonraki izin zamanı: ' + stamp(resource.next_at), 'muted'));
   }

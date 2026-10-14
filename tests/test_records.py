@@ -117,6 +117,7 @@ def test_attention_outcomes_are_delivered_with_reason(tmp_path,state):
 
 def test_lost_worker_reports_uncertain_execution_without_fabricating_evidence(tmp_path):
     store,registry=setup(tmp_path)
+    store._lost_read_retry=lambda con,task,now:False      # quarantine path: what a lost write (or an exhausted read) gets
     store.submit(agent='operator',objective='Read',inputs={},request_key='one',now=0)
     task=store.claim(mode='local',now=1);store.begin_tool(task,registry.tools['test.read'],{'id':'one'},now=2)
     assert store.claim(mode='local',now=602) is None

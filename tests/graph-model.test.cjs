@@ -12,7 +12,7 @@ test('configuration graph shares tools and only draws granted directional links'
   assert.deepEqual(graph.edges.filter(e=>e.to==='tool:policy.screen').map(e=>e.from).sort(),['agent:manager','agent:research']);
   assert(graph.edges.some(e=>e.from==='trigger:morning' && e.to==='agent:sahibinden' && e.inactive));
   assert(!graph.edges.some(e=>e.from==='agent:sahibinden' && e.to==='agent:manager'));
-  assert.equal(graph.edges.filter(e=>e.to==='connection:sahibinden').length,4);
+  assert.equal(graph.edges.filter(e=>e.to==='connection:sahibinden').length,6);   // 5 site tools + photo saving share the one Sahibinden lock
   const ids=new Set(graph.nodes.map(n=>n.id));
   assert(graph.edges.every(e=>ids.has(e.from)&&ids.has(e.to)));
 });
@@ -37,13 +37,14 @@ test('timer interval is not a duration limit and zero timestamps are valid', () 
 
 test('capability grouping never expands an agent grant or claims a browser session is ready', () => {
   const data={...config,connections:[{key:'sahibinden',kind:'browser',label:'Browser',session_status:'unconnected'}]};
-  const browser=globalThis.VerdaGraph.capabilities(data,'sahibinden');
-  assert.equal(browser.length,1);
+  const groups=globalThis.VerdaGraph.capabilities(data,'sahibinden');
+  const browser=groups.filter(g=>g.icon==='browser');
+  assert.equal(browser.length,1);               // local code tools form their own group
   assert.equal(browser[0].icon,'browser');
-  assert.deepEqual(browser[0].tools.map(t=>t.key),config.agents.find(a=>a.key==='sahibinden').tools);
+  assert.deepEqual(browser[0].tools.map(t=>t.key),config.agents.find(a=>a.key==='sahibinden').tools.filter(k=>config.tools.find(t=>t.key===k).resource==='sahibinden'));
   assert(!browser[0].tools.some(t=>t.available===true));
   const limited={...data,agents:data.agents.map(a=>a.key==='sahibinden'?{...a,tools:['sahibinden.read_listing']}:a)};
-  assert.equal(globalThis.VerdaGraph.capabilities(limited,'sahibinden')[0].tools.length,1);
+  assert.equal(globalThis.VerdaGraph.capabilities(limited,'sahibinden').find(g=>g.icon==='browser').tools.length,1);
   assert.equal(globalThis.VerdaGraph.capabilities(data,'manager')[0].icon,'code');
 });
 
@@ -54,7 +55,7 @@ test('agent overview keeps trigger and delegation edges while nesting granted to
   assert.equal(graph.edges.length,4);
   assert(graph.nodes.filter(n=>n.kind==='agent').every(n=>n.width>210&&n.height>80));
   const operator=graph.nodes.find(n=>n.key==='sahibinden');
-  assert.equal(operator.capabilities[0].tools.length,4);
+  assert.equal(operator.capabilities.find(g=>g.icon==='browser').tools.length,6);
   const ids=new Set(graph.nodes.map(n=>n.id));
   assert(graph.edges.every(e=>ids.has(e.from)&&ids.has(e.to)));
 });

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>BU_NAME</key>
+		<string>verda</string>
+		<key>HOME</key>
+		<string>/Users/m</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/m/.local/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.verda.agency-worker</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/caffeinate</string>
+		<string>-i</string>
+		<string>/Users/m/Dev/Verda/v2/.venv/bin/verda</string>
+		<string>agency-worker</string>
+		<string>--mode</string>
+		<string>local</string>
+		<string>--continuous</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/m/Library/Logs/Verda/agency-worker.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/m/Library/Logs/Verda/agency-worker.log</string>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/m/Dev/Verda/v2</string>
+</dict>
+</plist>

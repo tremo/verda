@@ -16,6 +16,28 @@ def add_commands(parser, commands):
     parser.add_argument('--supervisor-agent', default='manager', help='Supervisor agent key; empty string disables root result routing')
     commands.add_parser('agency-init')
     commands.add_parser('agency-status')
+    status = commands.add_parser('agency-facts-status')
+    status.add_argument('listing_id')
+    status.add_argument('--synthetic', action='store_true')
+    backfill = commands.add_parser('agency-facts-backfill')
+    backfill.add_argument('--synthetic', action='store_true')
+    propose = commands.add_parser('agency-facts-propose')
+    propose.add_argument('listing_id'); propose.add_argument('observation_id'); propose.add_argument('field')
+    propose.add_argument('value', help='JSON value')
+    propose.add_argument('--source-ref'); propose.add_argument('--quote')
+    propose.add_argument('--subject', default='this_parcel', choices=['this_parcel', 'neighbor', 'unclear'])
+    propose.add_argument('--proposer', default='llm:manual', help='must start with llm:')
+    decide = commands.add_parser('agency-facts-decide')
+    decide.add_argument('listing_id')
+    decide.add_argument('field')
+    decide.add_argument('value', help='JSON value, e.g. true, 8000000, "none"')
+    decide.add_argument('--note', required=True)
+    resolve_review = commands.add_parser('agency-facts-resolve')
+    resolve_review.add_argument('claim_id')
+    resolve_review.add_argument('--note', required=True)
+    verdict = resolve_review.add_mutually_exclusive_group(required=True)
+    verdict.add_argument('--accept', action='store_true')
+    verdict.add_argument('--reject', action='store_true')
     browser = commands.add_parser('agency-browser')
     browser.add_argument('action', choices=['attach','detach','claim','finish','status','select'])
     browser.add_argument('--driver', choices=['codex','jev'], default='codex')
@@ -24,11 +46,16 @@ def add_commands(parser, commands):
     jev = commands.add_parser('agency-jev-worker')
     jev.add_argument('--env-file', type=Path)
     jev.add_argument('--continuous', action='store_true')
+    jev.add_argument('--no-launch', action='store_true', help='Do not open Chrome or attach; only use an already connected browser')
+    jev.add_argument('--visible', action='store_true', help='Plain foreground tab in your own Chrome; waits for a human to pass a security check')
     subscription=commands.add_parser('agency-subscription')
     subscription.add_argument('file',type=Path)
     resolve=commands.add_parser('agency-source-resume')
     resolve.add_argument('incident_id')
     resolve.add_argument('--note',required=True)
+    publish = commands.add_parser('agency-publish-firestore', help="Publish v2's listing overlay to the private Firestore the dashboard reads")
+    publish.add_argument('--dry-run', action='store_true', help='Only count what would be written')
+    publish.add_argument('--every', type=int, default=0, help='Repeat every N seconds (a service); 0 runs once')
     retry = commands.add_parser('agency-records-retry')
     retry.add_argument('delivery_id')
     demo = commands.add_parser('agency-demo')
@@ -46,6 +73,12 @@ def add_commands(parser, commands):
     worker.add_argument('--mode', choices=['local'], default='local')
     worker.add_argument('--max-steps', type=int, default=1)
     worker.add_argument('--continuous', action='store_true')
+    scan = commands.add_parser('agency-scan')
+    scan.add_argument('--mode', choices=['daily', 'full'], default='daily')
+    scan.add_argument('--env-file', type=Path)
+    scan.add_argument('--no-details', action='store_true', help='Walk the result pages only; read no listing detail')
+    sync = commands.add_parser('agency-inbox-sync')
+    sync.add_argument('--env-file', type=Path)
     trigger = commands.add_parser('agency-trigger')
     trigger.add_argument('file', type=Path)
     event = commands.add_parser('agency-event')
@@ -61,9 +94,33 @@ def run(args):
     if args.database.startswith('sqlite:///'):
         store.archive_path = Path(args.database[len('sqlite:///'):])
     command = args.command
+    if command == 'agency-inbox-sync':
+        from verda.agency.inbox import run_sync
+        from verda.agency.jev import run_worker
+        sync_engine = AgentEngine(store, default_registry(config, store))
+        def sync_step():
+            store.tick()
+            sync_engine.step(mode='local')
+            run_worker(store, env_file=args.env_file, visible=True, launch=False)
+        try:
+            return run_sync(store, step=sync_step)
+        finally:
+            sync_engine.close()
+    if command == 'agency-scan':
+        from verda.agency.discovery import run_scan
+        from verda.agency.jev import run_worker
+        scan_engine = AgentEngine(store, default_registry(config, store))
+        def step():
+            store.tick()
+            scan_engine.step(mode='local')
+            run_worker(store, env_file=args.env_file, visible=True, launch=False)
+        try:
+            return run_scan(store, mode=args.mode, step=step, read_details=not args.no_details)
+        finally:
+            scan_engine.close()
     if command == 'agency-jev-worker':
         from verda.agency.jev import run_worker
-        return run_worker(store, env_file=args.env_file, continuous=args.continuous)
+        return run_worker(store, env_file=args.env_file, continuous=args.continuous, visible=args.visible, launch=not args.no_launch)
     if command == 'agency-browser':
         from verda.agency.browser import BrowserBridge
         bridge = BrowserBridge(store)
@@ -87,11 +144,47 @@ def run(args):
     if command == 'agency-subscription':
         store.register_subscription(**json.loads(args.file.read_text()))
         return {'registered':True}
+    if command == 'agency-publish-firestore':
+        import time as _time
+        from verda.publish.firestore import Firestore
+        from verda.publish.sync import sync
+        firestore = Firestore()
+        while True:
+            try:
+                result = sync(store, firestore, dry_run=args.dry_run)
+                if not args.dry_run:
+                    from verda.publish.feedback import import_feedback
+                    result.update(import_feedback(store, firestore))               # the owner's corrections on the dashboard flow back as user facts
+            except Exception as error:                      # one failed round never stops the service; it is retried on the next one
+                result = {'error': type(error).__name__ + ':' + str(error)[:80]}
+            if not args.every:
+                return result
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+            _time.sleep(args.every)
     if command == 'agency-source-resume':
         store.resolve_source(args.incident_id,args.note)
         return {'resolved':args.incident_id}
     if command == 'agency-status':
         return store.overview()
+    if command == 'agency-facts-status':
+        from verda.agency.research import fact_status
+        return fact_status(store, args.listing_id, mode='synthetic' if args.synthetic else 'local')
+    if command == 'agency-facts-backfill':
+        with store.transaction() as con:
+            return store.facts.backfill(con, 'synthetic' if args.synthetic else 'local', time.time())
+    if command == 'agency-facts-propose':
+        from verda.agency.research import fact_propose
+        if not args.proposer.startswith('llm:'):
+            raise ValueError('Proposer must start with llm:')
+        return fact_propose(store, {'listing_id': args.listing_id, 'observation_id': args.observation_id, 'field': args.field,
+                                    'value': json.loads(args.value), 'source_ref': args.source_ref, 'quote': args.quote,
+                                    'subject': args.subject}, mode='local', task_id='', proposer=args.proposer)
+    if command == 'agency-facts-decide':
+        with store.transaction() as con:
+            return store.facts.decide(con, args.listing_id, 'local', args.field, json.loads(args.value), args.note, time.time())
+    if command == 'agency-facts-resolve':
+        with store.transaction() as con:
+            return store.facts.resolve_review(con, args.claim_id, accepted=args.accept, note=args.note, now=time.time())
     if command == 'agency-records-retry':
         store.retry_record_delivery(args.delivery_id)
         return {'delivery_id': args.delivery_id, 'state': 'pending'}
@@ -100,9 +193,15 @@ def run(args):
                 inputs=json.loads(args.inputs.read_text()) if args.inputs else {}, request_key=args.request_key,
                 priority=args.priority, listing_ref=args.listing_ref, executor_tool=args.tool)}
     if command == 'agency-trigger':
-        data = json.loads(args.file.read_text())
-        store.register_trigger(**data)
-        return {'registered': data['key']}
+        from datetime import datetime
+        registered = []
+        loaded = json.loads(args.file.read_text())
+        for data in (loaded if isinstance(loaded, list) else [loaded]):
+            if isinstance(data.get('next_at'), str):      # an ISO time with its offset, e.g. 2026-10-09T09:00:00+03:00
+                data = {**data, 'next_at': datetime.fromisoformat(data['next_at']).timestamp()}
+            store.register_trigger(**data)
+            registered.append(data['key'])
+        return {'registered': registered}
     if command == 'agency-event':
         return {'tasks': store.publish(args.request_key, args.event_type, json.loads(args.file.read_text()))}
     if command == 'agency-demo':
@@ -129,7 +228,10 @@ def run(args):
     steps = 0
     try:
         while args.continuous or steps < args.max_steps:
-            try:store.tick()
+            try:
+                store.tick()
+                from verda.agency.backup import maybe_backup
+                maybe_backup(store)
             except sqlite3.Error:
                 from verda.agency.health import worker_health
                 engine.storage_error='SQLiteError'

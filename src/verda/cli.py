@@ -42,9 +42,29 @@ def main():
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--token-file", type=Path, default=Path(".local/api-token"))
     serve.add_argument("--viewer-link-file", type=Path, default=Path(".local/viewer-link"))
+    serve.add_argument("--require-login", action="store_true", help="Ask for a one-time link even from this Mac (default: this Mac needs none)")
+    panel = commands.add_parser("panel", help="Print (or open) a fresh link to the panel")
+    panel.add_argument("--port", type=int, default=18771)
+    panel.add_argument("--token-file", type=Path, default=Path(".local/api-token"))
+    panel.add_argument("--host", default="verda.localhost", help="Name the panel link uses (resolves to this Mac without any setup)")
+    panel.add_argument("--open", action="store_true", help="Open the link in the default browser instead of printing it")
     from verda.agency.commands import add_commands, run as run_agency
     add_commands(parser, commands)
     args = parser.parse_args()
+    if args.command == "panel":
+        import subprocess
+        import urllib.request
+        try:
+            request = urllib.request.Request(f"http://127.0.0.1:{args.port}/api/viewer-link", method="POST",
+                                             headers={"Authorization": "Bearer " + args.token_file.read_text().strip(), "Host": f"{args.host}:{args.port}"})
+            url = json.load(urllib.request.urlopen(request, timeout=10))["url"]
+        except (OSError, ValueError, KeyError):
+            raise SystemExit("Panel çalışmıyor ya da erişilemiyor. Servis kurulu mu? deploy/launchd/install.sh")
+        if args.open:
+            subprocess.run(["open", url], check=False)
+        else:
+            print(url)
+        return
     if args.command.startswith("agency-"):
         print(json.dumps(run_agency(args), ensure_ascii=False, indent=2))
         return
@@ -123,7 +143,7 @@ def main():
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w") as link_file:
                 link_file.write(f"http://127.0.0.1:{args.port}/control/unlock/{nonce}")
-            uvicorn.run(create_app(engine, token, workflow_store, runtime, viewer_nonce=nonce, agency_store=agency_store), host="127.0.0.1", port=args.port,
+            uvicorn.run(create_app(engine, token, workflow_store, runtime, viewer_nonce=nonce, agency_store=agency_store, trust_loopback=not args.require_login), host="127.0.0.1", port=args.port,
                         access_log=False, log_level="warning")
             return
         print(json.dumps(result, ensure_ascii=False, indent=2))

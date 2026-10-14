@@ -1,0 +1,10 @@
+.topnav a{color:var(--ink);text-decoration:none;font-size:13px;margin-left:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card h3{margin:0 0 6px;font-size:16px}.status{display:inline-flex;align-items:center;gap:7px;font-size:13px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}.working .dot{background:var(--ok);box-shadow:0 0 0 0 var(--ok);animation:pulse 1.4s infinite}.waiting .dot{background:var(--warn)}
+@keyframes pulse{70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.counts{display:flex;gap:14px;margin:10px 0}.bucket{display:flex;align-items:center;gap:6px;font-size:14px}.bucket svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7}
+.bucket b{font-size:18px}.bucket.you{color:var(--bad)}details{margin-top:6px}summary{cursor:pointer;color:var(--acc);font-size:13px}
+.task{border-top:1px solid var(--line);padding:7px 0;font-size:13px}.task .meta{color:var(--mut);font-size:12px}
+@media (prefers-reduced-motion:reduce){.working .dot{animation:none}}

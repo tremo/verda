@@ -125,3 +125,129 @@ def request_review(store, listing_id, request_key):
         return store._submit(con, agent=store.supervisor_agent, objective=objective,
                              inputs={'listing_id': listing_id, 'max_followups': 1}, listing_ref=listing_id,
                              request_key='review:' + request_key, source='control:review', mode='local', priority=40, now=time.time())
+
+
+def legacy_lifecycle(store, listing_id):
+    """The old system's verdict for a listing, read-only. None when unknown."""
+    archive = archive_connection(store)
+    if not archive:
+        return None
+    try:
+        snapshot = archive.execute('SELECT id FROM legacy_snapshots ORDER BY imported_at DESC LIMIT 1').fetchone()
+        row = snapshot and archive.execute('SELECT lifecycle FROM cases WHERE listing_id=? AND snapshot_id=?', (listing_id, snapshot['id'])).fetchone()
+        return row['lifecycle'] if row else None
+    finally:
+        archive.close()
+
+
+LEGACY_REASONS = {'listing_area_under_1000': 'alan 1.000 m² altında', 'price_over_15m': 'fiyat 15 milyon ₺ üstünde', 'shared_title_excluded': 'hisseli / paylı tapu',
+                  'direct_cadastral_road_absent': 'doğrudan kadastral yol yok', 'first_degree_natural_sit': '1. derece doğal sit',
+                  'invalid_listing_identity_non_land_decoy': 'arsa ilanı değil ya da ilan kimliği geçersiz'}
+
+
+def legacy_exclusion_reason(store, listing_id):
+    """Why the old system excluded a listing, in words; None when it did not or no reason was kept."""
+    archive = archive_connection(store)
+    if not archive:
+        return None
+    try:
+        snapshot = archive.execute('SELECT id FROM legacy_snapshots ORDER BY imported_at DESC LIMIT 1').fetchone()
+        row = snapshot and archive.execute("SELECT payload FROM legacy_rows WHERE snapshot_id=? AND table_name='items' AND subject_id=?", (snapshot['id'], listing_id)).fetchone()
+        if not row:
+            return None
+        item = json.loads(row['payload'])
+        if item.get('lifecycle') != 'excluded':
+            return None
+        text = str(json.loads(item.get('legacy_json') or '{}').get('exclusion_reason') or '').strip()
+    finally:
+        archive.close()
+    if not text or text == 'None':
+        return None
+    parts = [p.strip() for p in text.split(';') if p.strip()]
+    return '; '.join(LEGACY_REASONS.get(p, p) for p in parts)[:400]
+
+
+def fact_status(store, listing_id, *, mode='local'):
+    """Verified facts, the rule engine's decision and the next real action for one listing."""
+    lifecycle = legacy_lifecycle(store, listing_id) if mode == 'local' else None
+    with store.transaction() as con:
+        return store.facts.status(con, listing_id, mode, legacy_lifecycle=lifecycle)
+
+
+def normalise_value(field, value):
+    """A plain "no natural sit" said as false means the vocabulary's 'none'. Nothing else is guessed: true says nothing about the degree."""
+    return 'none' if field == 'natural_sit' and value is False else value
+
+
+def vocabulary_hint(field):
+    from verda.facts.model import FIELDS
+    spec = FIELDS.get(field)
+    return list(spec.values) if spec and spec.kind == 'enum' else None
+
+
+def fact_propose(store, args, *, mode, task_id, proposer=None):
+    """The reading agent's proposal. It is verified like any other: the model never writes facts."""
+    import time
+    from verda.facts.model import Proposal
+    with store.transaction() as con:
+        agent = con.execute('SELECT agent FROM inbox WHERE id=?', (task_id,)).fetchone()
+        who = proposer or 'llm:' + (agent['agent'] if agent else 'unknown')
+        result = store.facts.submit(con, Proposal(
+            listing_ref=args['listing_id'], field=args['field'], value=normalise_value(args['field'], args['value']), proposer=who, mode=mode,
+            observation_id=args['observation_id'], source_ref=args.get('source_ref') or None,
+            quote=args.get('quote') or None, subject=args.get('subject', 'this_parcel')), now=time.time())
+        if result['status'] == 'accepted' and not result['duplicate']:
+            result['assessment'] = store.facts.assess(con, args['listing_id'], mode, time.time())
+        if result.get('status') == 'rejected' and result.get('reason') == 'value_not_in_vocabulary':
+            result['allowed_values'] = vocabulary_hint(args['field'])           # so the proposer can correct itself instead of giving up
+        return result
+
+
+def flag_for_clarification(store, args, *, mode):
+    """The reading agent marks a seller answer that does not settle a field; the quote is checked against the recorded message."""
+    from verda.facts.flags import raise_flag
+    with store.transaction() as con:
+        return raise_flag(con, listing_ref=args['listing_id'], mode=mode, field=args['field'], observation_id=args['observation_id'],
+                          source_ref=args['source_ref'], quote=args['quote'], note=args['note'])
+
+
+def sender_block(store, listing_id, mode, status):
+    """The seller message for the listing page: the mode, what would be asked now (or why nothing), and every attempt so far."""
+    from verda.agency import message
+    now = time.time()
+    current_mode = message.mode_of(store)
+    with store.transaction() as con:
+        attempts = message.rows(con, listing_id, mode)
+    return {'mode': current_mode, 'preview': message.preview(store, listing_id, mode, now, current=status),
+            'attempts': [{k: a[k] for k in ('id', 'state', 'fields', 'text', 'reason', 'thread_url', 'created_at', 'updated_at', 'sent_at')} | {'evidence': a['evidence']} for a in attempts]}
+
+
+def listing_file(store, listing_id, *, mode='local'):
+    """Everything saved about one listing, for the local panel. Bounded; photos are served separately."""
+    status = fact_status(store, listing_id, mode=mode)
+    with store.transaction() as con:
+        def latest(tool):
+            row = con.execute('SELECT id,payload,captured_at FROM observations WHERE tool=? AND mode=? AND listing_ref=? ORDER BY captured_at DESC LIMIT 1',
+                              (tool, mode, listing_id)).fetchone()
+            return None if row is None else {'id': row['id'], 'captured_at': row['captured_at'], 'payload': json.loads(row['payload'])}
+        page, route = latest('sahibinden.read_listing'), latest('geo.route')
+        assets = store.assets.listing(con, listing_id, mode)
+        from verda.facts.flags import open_flags
+        clarifications = open_flags(con, listing_id, mode)
+    detail = (page or {}).get('payload') or {}
+    from verda.agency.learning import context_of, learning, unknown_fields
+    from verda.agency.listing_dates import collect
+    dates = collect(store, mode).get(listing_id) or {}
+    return {
+        'listing_id': listing_id, 'mode': mode, 'status': status,
+        'legacy_reason': legacy_exclusion_reason(store, listing_id) if status.get('legacy_lifecycle') == 'excluded' else None,
+        'dates': {'published_at': dates.get('published_at'), 'discovered_at': dates.get('discovered_at'), 'discovered_by': dates.get('discovered_by')},
+        'learning': learning(store, listing_id, unknown_fields(status), status.get('next_action'), mode=mode, context=context_of(status)),
+        'sender': sender_block(store, listing_id, mode, status),
+        'clarifications': [{k: f[k] for k in ('id', 'field', 'note', 'quote', 'source_ref', 'created_at')} for f in clarifications],
+        'page': None if page is None else {
+            'observation_id': page['id'], 'captured_at': page['captured_at'], 'title': detail.get('title'), 'url': detail.get('url'),
+            'description': (detail.get('description') or '')[:16000], 'attributes': detail.get('attributes') or {},
+            'photos_listed': len(detail.get('photos') or [])},
+        'route': None if route is None else {'captured_at': route['captured_at'], **{k: route['payload'].get(k) for k in ('origin', 'destination', 'straight_line_km', 'engines', 'note', 'reason')}},
+        'assets': [{'id': a['id'], 'mime': a['mime'], 'bytes': a['bytes']} for a in assets[:40]]}

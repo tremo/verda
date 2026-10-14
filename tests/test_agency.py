@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -104,6 +105,7 @@ def test_resource_blocker_stops_queue(tmp_path):
 
 def test_started_tool_after_worker_loss_is_uncertain_never_replayed(tmp_path):
     s,r=setup(tmp_path)
+    s._lost_read_retry=lambda con,task,now:False      # quarantine path: what a lost write (or an exhausted read) gets
     submit(s,now=0)
     task=s.claim(mode='local',now=1)
     s.begin_tool(task,r.tools['test.read'],{'id':'one'},now=2)
@@ -133,7 +135,9 @@ def test_timer_delivery_survives_restart_and_coalesces_missed_intervals(tmp_path
     restored=AgencyStore(s.path,s.config)
     assert restored.tick(now=450)==[]
     assert restored.overview()['triggers'][0]['next_at']==510
-    assert len(restored.tick(now=510))==1
+    assert restored.tick(now=510)==[]                      # the first run is still open: a trigger runs one at a time
+    with restored.transaction() as con: con.execute("UPDATE inbox SET state='complete'")
+    assert len(restored.tick(now=610))==1
 
 
 def test_events_and_tasks_have_idempotency_keys(tmp_path):
@@ -259,6 +263,7 @@ def test_agent_uses_its_configured_provider(tmp_path):
 
 def test_lost_child_worker_notifies_waiting_manager(tmp_path):
     s,r=setup(tmp_path)
+    s._lost_read_retry=lambda con,task,now:False      # quarantine path: what a lost write (or an exhausted read) gets
     root=submit(s,'manager',now=0)
     parent=s.claim(mode='local',now=1)
     s.delegate(parent,'operator','Read',{'id':'one'},None,now=2)
@@ -325,3 +330,137 @@ def test_queue_counts_include_records_beyond_visible_page(tmp_path):
     assert v['total_tasks']==201 and len(v['tasks'])==200
     assert v['tasks_truncated'] is True
     assert sum(c['count'] for c in v['task_counts'])==201
+
+
+def test_an_invalid_request_from_the_agent_comes_back_as_feedback_and_the_task_goes_on(tmp_path):
+    s, r = setup(tmp_path)
+    task = submit(s, now=0)
+    provider = Provider([decision('record', 'not-a-delivered-record', args={'offset': 0}),            # a record never delivered to this task
+                         decision('tool', 'test.read', args={'wrong': 1}),                             # arguments off the tool's schema
+                         decision('tool', 'test.read', args={'id': 'one'}),
+                         decision('complete', args={'read': 'one'})])
+    engine = AgentEngine(s, r, {'codex': provider})
+    for n in range(4):
+        assert engine.step(now=n + 1)
+    view = s.overview()
+    root = next(t for t in view['tasks'] if t['id'] == task)
+    assert root['state'] == 'complete'
+    rejected = [e for e in view['events'] if e['kind'] == 'decision_rejected']
+    assert len(rejected) == 2
+    # the agent was told what was wrong on its next turn
+    assert [h['kind'] for h in provider.calls[1]['context']['history']][-1] == 'decision_rejected'
+
+
+def test_three_invalid_requests_in_a_row_stop_the_task(tmp_path):
+    s, r = setup(tmp_path)
+    task = submit(s, now=0)
+    provider = Provider([decision('record', 'x'), decision('record', 'y'), decision('record', 'z')])
+    engine = AgentEngine(s, r, {'codex': provider})
+    for n in range(3):
+        engine.step(now=n + 1)
+    root = next(t for t in s.overview()['tasks'] if t['id'] == task)
+    assert root['state'] == 'blocked' and root['reason'] == 'repeated_invalid_decisions'
+
+
+def test_when_the_model_cannot_be_reached_the_task_waits_and_retries_then_stops_with_a_reason(tmp_path):
+    from verda.providers import ProviderError
+
+    class Down:
+        def generate(self, **kwargs):
+            raise ProviderError('codex_timeout')
+
+    s, r = setup(tmp_path)
+    task = submit(s, now=0)
+    engine = AgentEngine(s, r, {'codex': Down()})
+    clock = 1.0
+    for waited in (60, 180, 600, 1800):
+        assert engine.step(now=clock)
+        root = next(t for t in s.overview()['tasks'] if t['id'] == task)
+        assert root['state'] == 'queued' and root['reason'].startswith('provider_retry')
+        assert not engine.step(now=clock + waited - 1)           # not before the wait is over
+        clock += waited
+    assert engine.step(now=clock)                                 # the fifth failure stops it
+    root = next(t for t in s.overview()['tasks'] if t['id'] == task)
+    assert root['state'] == 'blocked' and root['reason'].startswith('provider_unavailable')
+
+
+def test_a_parent_does_not_wait_forever_for_a_child_that_stopped(tmp_path):
+    s, r = setup(tmp_path)
+    root = submit(s, 'manager', now=0)
+    provider = Provider([decision('delegate', 'operator', 'Read one', {'id': 'one'}), decision('complete', args={'status': 'partial'})])
+    engine = AgentEngine(s, r, {'codex': provider})
+    engine.step(now=1)                                              # the parent delegates
+    child = s.claim(mode='local', now=2)
+    s.transition(child, 'blocked', reason='read_failed', now=3)      # the child stops: the parent is woken
+    engine.step(now=4)                                              # and completes with what it has
+    view = s.overview()
+    assert next(t for t in view['tasks'] if t['id'] == root)['state'] == 'complete'
+
+
+def test_a_read_call_lost_with_its_worker_is_tried_again_and_only_a_lost_write_is_quarantined(tmp_path):
+    s, r = setup(tmp_path)
+    submit(s, now=0)
+    task = s.claim(mode='local', now=1)
+    s.begin_tool(task, r.tools['test.read'], {'id': 'one'}, now=2)
+    again = s.claim(mode='local', now=602)                                    # the lease ran out: the read call is not trusted, but nothing was changed
+    assert again is None                                                      # retried after a short wait, not at once
+    v = s.overview()
+    assert v['tasks'][0]['state'] == 'queued' and v['tasks'][0]['reason'] == 'worker_lost_retry' and v['resources'][0]['halted'] is None
+    assert s.claim(mode='local', now=608)['id'] == task['id']                 # the task goes on
+    # a write call is never replayed: the source is held until a person looks
+    s2, r2 = setup(tmp_path / 'w')
+    submit(s2, now=0)
+    t2 = s2.claim(mode='local', now=1)
+    s2.begin_tool(t2, r2.tools['test.read'].model_copy(update={'effect': 'write'}), {'id': 'one'}, now=2)
+    assert s2.claim(mode='local', now=602) is None
+    assert s2.overview()['tasks'][0]['state'] == 'uncertain' and s2.overview()['resources'][0]['halted'] == 'uncertain_execution'
+
+
+def test_a_task_that_keeps_losing_its_worker_is_quarantined_after_three_retries(tmp_path):
+    s, r = setup(tmp_path)
+    submit(s, now=0)
+    clock, states = 1.0, []
+    for _ in range(4):
+        task = s.claim(mode='local', now=clock)
+        s.begin_tool(task, r.tools['test.read'], {'id': 'one'}, now=clock + 1)
+        clock += 700
+        s.claim(mode='local', now=clock)                                      # the lease has run out: expiry runs here
+        states.append(s.overview()['tasks'][0]['state'])
+        clock += 10
+    assert states == ['queued', 'queued', 'queued', 'uncertain']
+
+
+def test_a_batch_of_ten_is_read_once_each_and_finishes_inside_the_turn_budget(tmp_path):
+    # The bookkeeping stored with every turn (a copy of the operator's prompt) used to fill the context, so the first reads of a batch left the
+    # agent's view and it read them again until the turn budget ran out.
+    prompt = 'Sen bir operatörsün. Toplu işte her ilanı sırayla oku. ' * 100
+    schema = {'type': 'object', 'properties': {'listing_id': {'type': 'string'}}, 'required': ['listing_id'], 'additionalProperties': False}
+    cfg = AgencyConfig(agents=(AgentDefinition(key='operator', label='Operator', description='Reads', prompt=prompt, tools=('test.read',), max_turns=13),),
+                       tools=(ToolDefinition(key='test.read', label='Read', description='Synthetic read', transport='python', resource='site', input_schema=schema),))
+    s, r = setup(tmp_path, cfg, {'test.read': lambda args: {'listing_id': args['listing_id'], 'page_text': 'x' * 7000}})
+    ids = [str(1000000000 + i) for i in range(10)]
+    task = s.submit(agent='operator', objective='toplu iş', request_key='batch', now=0,
+                    inputs={'routine': 'batch', 'action': 'test.read', 'items': [{'listing_id': i} for i in ids]})
+
+    class Reader:
+        """Finds its place the way a model does: from what it can still see of its own earlier decisions."""
+        def __init__(self): self.contexts = []
+        def generate(self, **kwargs):
+            self.contexts.append(kwargs['context'])
+            seen = {json.loads(h['data']['decision']['arguments_json']).get('listing_id') for h in kwargs['context']['history'] if h['kind'] == 'decision'}
+            todo = [i for i in ids if i not in seen]
+            choice = decision('tool', 'test.read', args={'listing_id': todo[0]}) if todo else decision('complete', args={'read': len(ids)})
+            return Generation('fake', None, 'invocation', 1, {}, choice)
+
+    reader = Reader()
+    engine = AgentEngine(s, r, {'codex': reader})
+    for n in range(11):
+        assert engine.step(now=n + 1)
+    root = next(t for t in s.overview()['tasks'] if t['id'] == task)
+    assert root['state'] == 'complete' and len(reader.contexts) == 11
+    with sqlite3.connect(s.path) as con:
+        read = [json.loads(a)['listing_id'] for (a,) in con.execute("SELECT arguments FROM tool_calls WHERE tool='test.read' ORDER BY started_at")]
+    assert read == ids                                                                    # each listing once, in order
+    assert reader.contexts[0]['batch_progress'] == {'done': [], 'remaining': ids, 'next': ids[0]}
+    assert reader.contexts[6]['batch_progress'] == {'done': ids[:6], 'remaining': ids[6:], 'next': ids[6]}
+    assert reader.contexts[10]['batch_progress']['next'] is None

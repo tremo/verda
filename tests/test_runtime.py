@@ -145,7 +145,7 @@ def test_codex_rejects_invalid_result(process_mock):
 def test_codex_timeout_terminates_child_group(process_mock, monkeypatch):
     killed = []
     def communicate(self, prompt=None, timeout=None):
-        if timeout:
+        if prompt is not None:
             raise subprocess.TimeoutExpired(self.command, timeout)
         return "", ""
     monkeypatch.setattr(process_mock[0], "communicate", communicate)
@@ -153,3 +153,12 @@ def test_codex_timeout_terminates_child_group(process_mock, monkeypatch):
     with pytest.raises(ProviderError, match="codex_timeout"):
         CodexProvider().generate(instructions="Test", context={}, output_type=ManagerAdvice, timeout_seconds=1)
     assert killed == [424242]
+
+
+def test_codex_timeout_does_not_wait_forever_when_a_helper_keeps_the_pipes_open(process_mock, monkeypatch):
+    def communicate(self, prompt=None, timeout=None):
+        raise subprocess.TimeoutExpired(self.command, timeout)          # even after the kill the pipes never close
+    monkeypatch.setattr(process_mock[0], "communicate", communicate)
+    monkeypatch.setattr("verda.providers.os.killpg", lambda pid, sig: None)
+    with pytest.raises(ProviderError, match="codex_timeout"):
+        CodexProvider().generate(instructions="Test", context={}, output_type=ManagerAdvice, timeout_seconds=1)

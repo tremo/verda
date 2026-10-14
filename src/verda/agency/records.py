@@ -66,8 +66,9 @@ class RecordService:
                 raise ValueError('observation_identity_conflict')
             return old['id']
         args = json.loads(call['arguments'])
-        listing_ref = task['listing_ref'] or (args.get('listing_id') if isinstance(args.get('listing_id'), str) else None)
-        kind = 'calculation' if tool.key == 'policy.screen' else 'external_receipt' if tool.effect == 'write' else 'tool_observation'
+        listing_ref = task['listing_ref'] or (args.get('listing_id') if isinstance(args.get('listing_id'), str) else None) \
+            or (payload.get('listing_id') if tool.key == 'sahibinden.read_thread' and isinstance(payload.get('listing_id'), str) else None)
+        kind = 'calculation' if tool.key in {'policy.screen', 'facts.status', 'facts.propose', 'watchdog.check'} else 'external_receipt' if tool.effect == 'write' else 'tool_observation'
         record_id = uuid4().hex
         con.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (record_id, call['id'], task['id'], task['agent'], task['trace_id'], listing_ref, task['mode'],

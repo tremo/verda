@@ -8,6 +8,15 @@ import pytest
 from verda.storage import connect, initialize
 
 
+TEST_ACCOUNT = 'Deniz Kaan Yıldırım'          # a made-up account: the real one is a local setting, never in the repository
+
+
+@pytest.fixture(autouse=True)
+def test_account(monkeypatch):
+    from verda.agency import access
+    monkeypatch.setitem(access.ACCOUNT, 'name', TEST_ACCOUNT)
+
+
 @pytest.fixture
 def engine(tmp_path):
     engine = connect(f"sqlite:///{tmp_path / 'v2.sqlite'}")

@@ -52,7 +52,7 @@ class CodexProvider:
                  model: str | None = None, timeout_seconds: int = 120) -> Generation:
         if not 1 <= timeout_seconds <= 300:
             raise ValueError("Timeout must be between 1 and 300 seconds")
-        executable = shutil.which(self.executable)
+        executable = shutil.which(os.environ.get("VERDA_CODEX") or self.executable)
         if executable is None:
             raise ProviderError("codex_not_installed")
         prompt = json.dumps({"instructions": instructions,
@@ -96,7 +96,15 @@ class CodexProvider:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                process.communicate()
+                try:
+                    process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # A helper that left the process group can hold the pipes open: let go instead of waiting forever.
+                    for pipe in (getattr(process, name, None) for name in ("stdin", "stdout", "stderr")):
+                        try:
+                            pipe and pipe.close()
+                        except OSError:
+                            pass
                 raise ProviderError("codex_timeout") from None
             if process.returncode != 0:
                 # stderr can contain prompt or credential details; do not echo it.

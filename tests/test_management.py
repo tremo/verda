@@ -126,6 +126,7 @@ def test_browser_captcha_stops_shared_source_and_notifies_manager(tmp_path):
 
 def test_browser_disconnect_after_claim_is_never_silently_replayed(tmp_path):
     store,registry=setup(tmp_path);task,_=search(store,registry)
+    store._lost_read_retry=lambda con,task,now:False      # quarantine path: what a lost write (or an exhausted read) gets
     bridge=BrowserBridge(store);bridge.attach('test',now=3);job=bridge.claim('test',now=4)
     bridge.expire(now=605)
     assert bridge.overview(now=605)['jobs'][0]['state']=='uncertain'

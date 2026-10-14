@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import secrets
 import sqlite3
 import time
@@ -8,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,17 +61,54 @@ class ReviewRequest(BaseModel):
     listing_id: str | None = Field(default=None, max_length=100)
 
 
+class ListingDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    field: str = Field(min_length=2, max_length=40)
+    value: bool | float | str
+    note: str = Field(min_length=3, max_length=300)
+
+
+class FlagClose(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: str = Field(default="", max_length=300)
+
+
+class SettingChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=3, max_length=120)
+    value: bool | float | str | None = None
+
+
+class OutboxResolve(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    delivered: bool
+    note: str = Field(min_length=3, max_length=300)
+
+
+class SettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    changes: list[SettingChange] = Field(min_length=1, max_length=60)
+
+
+class AttentionAck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(min_length=4, max_length=40)
+
+
 class BrowserDriverRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     driver: Literal['codex', 'jev']
 
 
+SESSION_SECONDS = 7 * 24 * 3600      # a personal panel on this Mac: a week, then a fresh link
+
+
 def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None = None, runtime=None,
-               viewer_nonce: str | None = None, agency_store=None) -> FastAPI:
+               viewer_nonce: str | None = None, agency_store=None, trust_loopback: bool = False) -> FastAPI:
     if len(token) < 32:
         raise ValueError("An API token of at least 32 characters is required")
     app = FastAPI(title="Verda v2 — shadow backend", version="0.4.0", docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "verda.localhost", "testserver"])
     assets = Path(__file__).parent / "ui"
     app.mount("/control/assets", StaticFiles(directory=assets), name="control-assets")
     viewer_cookie = secrets.token_urlsafe(32)
@@ -88,6 +127,21 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"
         return response
 
+    @app.get("/", include_in_schema=False)
+    def home(request: Request):
+        """The plain address: the panel when this browser is signed in, otherwise how to get a fresh link."""
+        cookie = request.cookies.get("verda_viewer", "")
+        local = trust_loopback and request.client and request.client.host in ("127.0.0.1", "::1")
+        if local or (time.time() < viewer_state["session_expires"] and secrets.compare_digest(cookie.encode(), viewer_cookie.encode())):
+            return RedirectResponse("/control", status_code=303)
+        return HTMLResponse(
+            '<!doctype html><html lang="tr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Verda</title><body style="font:16px/1.5 system-ui;max-width:34rem;margin:12vh auto;padding:0 1rem">'
+            '<h1>Verda</h1><p>Panel çalışıyor, ama bu tarayıcıda oturumun yok.</p>'
+            '<p>Giriş için proje klasöründeki <b>deploy/Verda-Paneli.command</b> dosyasına çift tıkla; '
+            'taze bir giriş bağlantısı üretip tarayıcıda açar.</p>'
+            '<p style="color:#666">Ya da terminalde: <code>.venv/bin/verda panel --open</code></p></body></html>')
+
     @app.get("/control/unlock/{nonce}")
     def unlock(nonce: str):
         with viewer_lock:
@@ -95,12 +149,16 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
             if not expected or time.time() > viewer_state["nonce_expires"] or not secrets.compare_digest(nonce.encode(), expected.encode()):
                 raise HTTPException(403, "Local viewer link expired or already used")
             viewer_state["nonce"] = None
-            viewer_state["session_expires"] = time.time() + 4 * 3600
+            viewer_state["session_expires"] = time.time() + SESSION_SECONDS
         response = RedirectResponse("/control/flows", status_code=303)
-        response.set_cookie("verda_viewer", viewer_cookie, httponly=True, samesite="strict", max_age=4 * 3600, path="/")
+        response.set_cookie("verda_viewer", viewer_cookie, httponly=True, samesite="strict", max_age=SESSION_SECONDS, path="/")
         return response
 
     def viewer(request: Request):
+        # A personal panel on this Mac: a request that really comes from this machine (loopback) needs no link. The host-name check
+        # (no DNS rebinding) and, for every change, the same-page origin and CSRF token stay in force either way.
+        if trust_loopback and request.client and request.client.host in ("127.0.0.1", "::1"):
+            return
         cookie = request.cookies.get("verda_viewer", "")
         if time.time() >= viewer_state["session_expires"] or not secrets.compare_digest(cookie.encode(), viewer_cookie.encode()):
             raise HTTPException(401, "Open the one-time local viewer link generated by verda serve")
@@ -173,6 +231,153 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
         except KeyError:
             raise HTTPException(404, 'Record not found')
 
+    @app.get("/control/listing/{listing_id}")
+    def listing_page(listing_id: str):
+        if not re.fullmatch(r"[0-9]{6,14}", listing_id):
+            raise HTTPException(404, "Listing not found")
+        return FileResponse(assets / "listing.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/private/listing/{listing_id}", dependencies=[Depends(viewer)])
+    def listing_data(listing_id: str):
+        if agency_store is None or not re.fullmatch(r"[0-9]{6,14}", listing_id):
+            raise HTTPException(404, "Listing not found")
+        from verda.agency.research import listing_file
+        return {**listing_file(agency_store, listing_id), "csrf_token": csrf_token}
+
+    attention_cache = {"at": 0.0, "value": None}
+
+    @app.get("/control/attention")
+    def attention_page():
+        return FileResponse(assets / "attention.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/private/attention", dependencies=[Depends(viewer)])
+    def attention_data(fresh: bool = False):
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        if fresh or attention_cache["value"] is None or time.time() - attention_cache["at"] > 30:
+            from verda.agency.attention import attention
+            attention_cache.update(value=attention(agency_store), at=time.time())
+        return {**attention_cache["value"], "csrf_token": csrf_token}
+
+    @app.post("/control/private/attention/ack", dependencies=[Depends(editor)])
+    def attention_ack(command: AttentionAck):
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        from verda.agency.attention import acknowledge
+        try:
+            acknowledge(agency_store, command.key)
+        except ValueError as error:
+            raise HTTPException(409, str(error))
+        attention_cache["value"] = None
+        return {"acknowledged": command.key}
+
+    @app.get("/control/settings")
+    def settings_page():
+        return FileResponse(assets / "settings.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/operators")
+    def operators_page():
+        return FileResponse(assets / "operators.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/private/settings", dependencies=[Depends(viewer)])
+    def settings_data():
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        from verda.agency.tuning import describe
+        return {**describe(agency_store), "csrf_token": csrf_token}
+
+    @app.put("/control/private/settings", dependencies=[Depends(editor)])
+    def settings_change(command: SettingsRequest):
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        from verda.agency.tuning import apply
+        try:
+            return apply(agency_store, [c.model_dump() for c in command.changes])
+        except ValueError as error:
+            raise HTTPException(409, str(error))
+
+    @app.post("/control/private/outbox/{outbox_id}/resolve", dependencies=[Depends(editor)])
+    def outbox_resolve(outbox_id: str, command: OutboxResolve):
+        """The user's word on a message whose delivery could not be proven: it went, or it did not. Nothing is sent from here."""
+        if agency_store is None or not re.fullmatch(r"[0-9a-f]{32}", outbox_id):
+            raise HTTPException(404, "Message not found")
+        from verda.agency import message
+        try:
+            with agency_store.transaction() as con:
+                message.resolve_unknown(con, outbox_id, command.delivered, time.time(), command.note)
+        except ValueError:
+            raise HTTPException(409, "Yalnız gittiği doğrulanamayan mesaj için karar verilebilir")
+        attention_cache["value"] = None
+        return {"status": "confirmed" if command.delivered else "cancelled"}
+
+    @app.post("/control/private/triggers/{key}/run", dependencies=[Depends(editor)])
+    def trigger_run(key: str):
+        if agency_store is None or not re.fullmatch(r"[a-z0-9_-]{1,64}", key):
+            raise HTTPException(404, "Trigger not found")
+        from verda.agency.tuning import run_now
+        try:
+            return {"task_id": run_now(agency_store, key)}
+        except KeyError:
+            raise HTTPException(404, "Zamanlayıcı bulunamadı")
+        except ValueError as error:
+            raise HTTPException(409, str(error))
+
+    @app.get("/control/private/operators", dependencies=[Depends(viewer)])
+    def operators_data():
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        from verda.agency.operators import operator_status
+        return {**operator_status(agency_store), "csrf_token": csrf_token}
+
+    @app.get("/control/ranking")
+    def ranking_page():
+        return FileResponse(assets / "ranking.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/control/private/ranking", dependencies=[Depends(viewer)])
+    def ranking_data(limit: int = Query(default=50, ge=1, le=200)):
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        from verda.agency.score import ranking
+        return ranking(agency_store, {"limit": limit}, mode="local")
+
+    @app.post("/control/private/listing/{listing_id}/decide", dependencies=[Depends(editor)])
+    def listing_decide(listing_id: str, command: ListingDecision):
+        if agency_store is None or not re.fullmatch(r"[0-9]{6,14}", listing_id):
+            raise HTTPException(404, "Listing not found")
+        from verda.facts.flags import CLARIFIABLE
+        if command.field not in CLARIFIABLE:
+            raise HTTPException(409, "Bu alan buradan değiştirilemez")
+        with agency_store.transaction() as con:
+            result = agency_store.facts.decide(con, listing_id, "local", command.field, command.value, command.note, time.time())
+        if result["status"] != "accepted":
+            raise HTTPException(409, "Değer kabul edilmedi: " + str(result.get("reason")))
+        attention_cache["value"] = None
+        return {"status": "accepted"}
+
+    @app.post("/control/private/flags/{flag_id}/close", dependencies=[Depends(editor)])
+    def flag_close(flag_id: str, command: FlagClose):
+        if agency_store is None or not re.fullmatch(r"[0-9a-f]{32}", flag_id):
+            raise HTTPException(404, "Flag not found")
+        from verda.facts.flags import close_flag
+        try:
+            with agency_store.transaction() as con:
+                close_flag(con, flag_id, command.note)
+        except ValueError:
+            raise HTTPException(409, "İşaret zaten kapalı")
+        attention_cache["value"] = None
+        return {"closed": flag_id}
+
+    @app.get("/control/private/assets/{asset_id}", dependencies=[Depends(viewer)])
+    def listing_asset(asset_id: str):
+        if agency_store is None or not re.fullmatch(r"[0-9a-f]{64}", asset_id):
+            raise HTTPException(404, "Asset not found")
+        with agency_store.transaction() as con:
+            found = agency_store.assets.read(con, asset_id)
+        if found is None:
+            raise HTTPException(404, "Asset not found")
+        mime, path = found
+        return FileResponse(path, media_type=mime, headers={"Cache-Control": "private, max-age=86400", "Content-Disposition": "inline"})
+
     @app.get("/control/private/health", dependencies=[Depends(viewer)])
     def agency_health():
         if agency_store is None:raise HTTPException(503,'Agency not configured')
@@ -220,6 +425,15 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
         # clients without an Origin header may create/cancel workflow runs.
         if origin is not None:
             raise HTTPException(403, "Browser-origin commands are not enabled")
+
+    @app.post("/api/viewer-link", dependencies=[Depends(authorize), Depends(local_command)])
+    def new_viewer_link(request: Request):
+        """A fresh one-time panel link (10 minutes). Only a local client holding the API token can ask; the panel never offers it itself."""
+        with viewer_lock:
+            nonce = secrets.token_urlsafe(32)
+            viewer_state["nonce"] = nonce
+            viewer_state["nonce_expires"] = time.time() + 600
+        return {"url": str(request.base_url).rstrip("/") + "/control/unlock/" + nonce}
 
     def workflows() -> WorkflowStore:
         if workflow_store is None:

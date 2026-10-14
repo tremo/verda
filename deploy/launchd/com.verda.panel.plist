@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/m</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/m/.local/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.verda.panel</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/m/Dev/Verda/v2/.venv/bin/verda</string>
+		<string>serve</string>
+		<string>--port</string>
+		<string>18771</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/m/Library/Logs/Verda/panel.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/m/Library/Logs/Verda/panel.log</string>
+	<key>ThrottleInterval</key>
+	<integer>15</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/m/Dev/Verda/v2</string>
+</dict>
+</plist>

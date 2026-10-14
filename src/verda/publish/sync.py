@@ -1,0 +1,105 @@
+"""Writes the projection to Firestore: only documents that changed, stale overlays removed, every write counted. A dry run only counts."""
+import base64
+import json
+from pathlib import Path
+
+from verda.publish import projection
+
+MANIFEST = Path('.local/firestore-manifest.json')
+BATCH = 200
+CHUNK = 100_000                  # characters per base64 piece
+ASSET_BATCH_BYTES = 4_000_000   # one commit stays well under Firestore's 10 MiB request limit
+OWNED = (projection.COLLECTION,)                 # collections this publisher may delete from; `meta/v2` is replaced, never deleted
+
+
+def value(v):
+    if v is None:
+        return {'nullValue': None}
+    if isinstance(v, bool):
+        return {'booleanValue': v}
+    if isinstance(v, int):
+        return {'integerValue': str(v)}
+    if isinstance(v, float):
+        return {'doubleValue': v}
+    if isinstance(v, str):
+        return {'stringValue': v}
+    if isinstance(v, (list, tuple)):
+        return {'arrayValue': {'values': [value(x) for x in v]}}
+    if isinstance(v, dict):
+        return {'mapValue': {'fields': {str(k): value(x) for k, x in v.items()}}}
+    raise TypeError(type(v))
+
+
+def fields(data):
+    return {str(k): value(v) for k, v in data.items()}
+
+
+def load_manifest(path):
+    try:
+        return json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+def asset_writes(store, firestore, docs, manifest, mode='local'):
+    """Photos the overlays point to and that are not published yet: [(key, write)]. Read from the private store only when needed."""
+    wanted = {}
+    for collection, doc_id, data in docs:
+        if collection == projection.COLLECTION:
+            for position, asset in enumerate(data.get('photos') or []):
+                wanted[asset] = (doc_id, position)
+    out = []
+    for asset, (listing, position) in wanted.items():
+        key = f'{projection.ASSETS}/{asset}'
+        if manifest.get(key):
+            continue
+        with store.transaction() as con:
+            found = store.assets.read(con, asset)
+        if found is None:
+            continue
+        mime, path = found
+        data = base64.b64encode(Path(path).read_bytes()).decode()
+        body = {'mime': mime, 'chunks': [data[i:i + CHUNK] for i in range(0, len(data), CHUNK)], 'listingId': listing, 'position': position, 'source': 'v2'}
+        out.append((key, {'update': {'name': firestore.name(projection.ASSETS, asset), 'fields': fields(body)}}))
+    return out
+
+
+def commit(firestore, writes):
+    firestore.request('POST', firestore._base().rsplit('/documents', 1)[0] + '/documents:commit', {'writes': writes})
+
+
+def sync(store, firestore, *, dry_run=False, manifest_path=MANIFEST, mode='local', now=None):
+    docs = projection.build(store, mode=mode, now=now)
+    manifest = load_manifest(manifest_path)
+    writes, new_manifest = [], {}
+    for collection, doc_id, data in docs:
+        key = f'{collection}/{doc_id}'
+        fingerprint = projection.digest(data)
+        new_manifest[key] = fingerprint
+        if manifest.get(key) != fingerprint:
+            writes.append({'update': {'name': firestore.name(collection, doc_id), 'fields': fields(data)}})
+    expected = {doc_id for collection, doc_id, _ in docs if collection == projection.COLLECTION}
+    stale = [] if dry_run else [i for i in firestore.list_ids(projection.COLLECTION) if i not in expected]
+    deletes = [{'delete': firestore.name(projection.COLLECTION, i)} for i in stale]
+    assets = asset_writes(store, firestore, docs, manifest, mode)
+    summary = {'documents': len(docs), 'to_write': len(writes), 'to_delete': len(deletes), 'photos_to_write': len(assets), 'dry_run': dry_run}
+    if dry_run:
+        return summary
+    group, size = [], 0
+    for key, write in assets:                      # photos first, so an overlay never names a photo that is not there yet
+        piece = len(json.dumps(write, ensure_ascii=False))
+        if group and size + piece > ASSET_BATCH_BYTES:
+            commit(firestore, [w for _, w in group])
+            new_manifest.update({k: 'v2' for k, _ in group})
+            group, size = [], 0
+        group.append((key, write)); size += piece
+    if group:
+        commit(firestore, [w for _, w in group])
+        new_manifest.update({k: 'v2' for k, _ in group})
+    new_manifest.update({k: v for k, v in manifest.items() if k.startswith(projection.ASSETS + '/') and k not in new_manifest})
+    batch = writes + deletes
+    for start in range(0, len(batch), BATCH):
+        commit(firestore, batch[start:start + BATCH])
+    Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(manifest_path).write_text(json.dumps(new_manifest, ensure_ascii=False), encoding='utf-8')
+    return {**summary, 'written': len(writes), 'deleted': len(deletes), 'photos_written': len(assets)}

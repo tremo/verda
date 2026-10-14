@@ -9,7 +9,7 @@ Bu sürüm:
 - Eski SQLite verisini tek tutarlı, salt okunur işlemle alır; kaynak veritabanını değiştirmez.
 - İlan, kontrol, görev, kapı, mesaj, kullanıcı notu ve olay geçmişini sürümlü bir gölge kopyada saklar.
 - Aynı içerik tekrar aktarıldığında yeni kayıt üretmez; değişen kaynak ayrı sürüm oluşturur.
-- Hazır mesajları ve eski görevleri çalıştırılabilir kuyruğa koymaz. Belirsiz teslimatı aynen korur.
+- Eski görevleri çalıştırılabilir kuyruğa koymaz; belirsiz teslimatı aynen korur. Satıcıya mesaj için tek kayıtlı araç vardır (`sahibinden.send_message`): metni kod yazar, varsayılan mod **deneme**dir (göndermez); ayrıntı `docs/MESAJ-GONDERME.md`.
 - İlan dosyası ve sayfalanmış işlem geçmişini yerel API’den sunar.
 - Yeni doğrulanmış gözlemler için 15 milyon TL, 1.000 m² ve 45 dk kurallarını hesaplar.
 - Mevcut dashboard JSON’unu `schemaVersion: 2` sınırında doğrular; bilinmeyen alanları kaybetmeden saklar ve geri verir.
@@ -125,6 +125,14 @@ Abonelikler yerel CLI ile yönetilir:
 Geçerli şema v6 ayrıca yerel yönerge sürümlerini, tarayıcı sürücü oturumlarını ve tarayıcı iş makbuzlarını saklar. Eski görev ve kaynak kayıtları korunur; yükseltme tarayıcı işi veya model çağrısı başlatmaz.
 
 Bu katman kaynak bildirimlerini ve değerlendirmeleri saklar. Nihai kanıt kabulü, çelişki çözümü, ilan adaylığına bağlayıcı politika uygulanması, canlı browser/mesaj doğrulaması ve eski dashboard'a yayın ayrı tamamlanacak parçalardır.
+
+### Olgu katmanı (gözlem → doğrulanmış olgu → karar)
+
+Şema v8. Gözlemlerden yapısal olgular (fiyat, alan, ada/parsel, "Tapu Durumu") kodla çıkarılır; serbest metin modelle okunur, kod yalnız denetler: alıntı kaynakta birebir geçmeli, mesajı satıcı yazmış olmalı, cümle çekingen/kesik olmamalı. Kabul edilen iddia kanıt derecesiyle (`kullanici` · `resmi` · `bagimsiz` · `beyan` · `rapor`) append-only `claims` tablosuna yazılır; birleştirici bunları `evaluate`'in girdisine çevirir, karar yalnız değişince `assessments`'a kaydedilir. `facts.status` aracı ve `agency-facts-*` komutları bunu okur. Ayrıntı, sınırlar ve genişletme: [docs/FACTS-LAYER.md](docs/FACTS-LAYER.md). Şema v8'e yükseltmeden önce yedek alın.
+
+### Nöbetçi (değişmez kurallar)
+
+`watchdog.check` aracı sistemin her zaman doğru olması gereken kurallarını kayıtlardan kontrol eder: cevaplanmış soru tekrar sorulmaz, mesaj saati ve aralığı, aynı ilana tekrar tekrar gönderim, bir günü geçen işlenmemiş satıcı cevabı, okunmuş konuşmanın kaybolması, şüpheli alan elemesi, döngü, hata oranı, tarama kapsamı, canlılık. Salt okur, düzeltmez. Zamanlayıcı 15 dakikada bir model çağırmadan çalıştırır ve sonucu kayıt olarak saklar; pano yayıncısı da her yayında çalıştırır, bulgular panonun Durum sayfasında ve paneldeki dikkat listesinde görünür. Ayrıntı: [docs/NOBETCI.md](docs/NOBETCI.md).
 
 ## Ürün hedefi: n8n tarzı görsel otomasyon stüdyosu
 

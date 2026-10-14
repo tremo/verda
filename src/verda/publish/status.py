@@ -90,8 +90,12 @@ def build(store, *, mode='local', now=None, running=None, problems=()):
     for f in guard['findings']:
         health.append({'level': 'warn' if f['severity'] == watchdog.WARN else 'bad',
                        'text': ('KRİTİK · ' if f['severity'] == watchdog.CRITICAL else 'Nöbetçi · ') + f['title'] + (' · #' + ', #'.join(f['listings'][:5]) if f['listings'] else '')})
-    for label, up in running.items():
-        health.append({'level': 'ok' if up else 'bad', 'text': f"{SERVICES[label]}: {'çalışıyor' if up else 'KAPALI'}"})
+    for label, name in SERVICES.items():
+        if not running and label not in running:
+            continue                                   # launchd could not be asked (tests, another machine): say nothing rather than guess
+        up = running.get(label)
+        # A service taken out of launchd is not listed at all: it must still show, or a stopped worker simply disappears from the page.
+        health.append({'level': 'ok' if up else 'bad', 'text': f"{name}: {'çalışıyor' if up else 'KAPALI' if label in running else 'durduruldu (yüklü değil)'}"})
     for inc in incidents:
         health.append({'level': 'bad', 'text': f"Kaynak engelli: {inc['resource']} · {inc['reason']} (açılalı {age_text(now - inc['created_at'])})"})
     if not incidents:

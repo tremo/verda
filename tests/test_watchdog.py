@@ -171,3 +171,10 @@ def test_the_dashboard_says_when_the_opportunity_score_could_not_be_computed(sto
     docs = projection.build(store, now=NOW)
     page = next(d for c, k, d in docs if (c, k) == ('meta', 'v2status'))
     assert page['health'][0] == {'level': 'bad', 'text': page['health'][0]['text']} and page['health'][0]['text'].startswith('Fırsat puanı hesaplanamadı (ZeroDivisionError')
+
+
+def test_a_service_taken_out_of_launchd_still_shows_on_the_status_page(store):
+    from verda.publish import status
+    page = status.build(store, now=NOW, running={'com.verda.panel': True, 'com.verda.publisher': True})
+    texts = [h['text'] for h in page['health']]
+    assert 'Ajan işçisi: durduruldu (yüklü değil)' in texts and 'Tarayıcı işçisi: durduruldu (yüklü değil)' in texts and 'Panel: çalışıyor' in texts

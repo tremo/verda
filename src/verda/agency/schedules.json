@@ -5,7 +5,7 @@
     "next_at": "2026-10-08T12:00:00+03:00",
     "spec": {
       "agent": "sahibinden",
-      "interval_seconds": 10800,
+      "interval_seconds": 1800,
       "mode": "local",
       "priority": 30,
       "objective": "Gelen kutusunu eşitle: değişen konuşmaları oku, satıcı yanıtlarından sit ve erişim olgularını öner.",
@@ -58,6 +58,22 @@
         "routine": "research_sweep"
       },
       "when": "work_waiting"
+    }
+  },
+  {
+    "key": "reply-interpret",
+    "kind": "timer",
+    "next_at": "2026-10-14T19:14:16+03:00",
+    "spec": {
+      "agent": "manager",
+      "interval_seconds": 1800,
+      "mode": "local",
+      "priority": 26,
+      "objective": "Satıcı cevaplarını olguya çevir",
+      "inputs": {
+        "routine": "reply_backfill"
+      },
+      "when": "replies_pending"
     }
   },
   {

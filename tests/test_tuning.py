@@ -52,7 +52,7 @@ def test_agent_limits_apply_to_tasks_created_afterwards_only(tmp_path):
     new = store.submit(agent='manager', objective='b', inputs={}, request_key='after')
     with store.transaction() as con:
         defs = {r['id']: json.loads(r['definition']) for r in con.execute('SELECT id,definition FROM inbox')}
-    assert defs[old]['max_turns'] == 16 and defs[new]['max_turns'] == 5 and defs[new]['model']['timeout_seconds'] == 60
+    assert defs[old]['max_turns'] == 32 and defs[new]['max_turns'] == 5 and defs[new]['model']['timeout_seconds'] == 60
 
 
 def test_timers_can_be_retimed_switched_off_and_run_by_hand_once(tmp_path):

@@ -23,7 +23,8 @@
         "parcel",
         "research"
       ],
-      "version": "22"
+      "version": "23",
+      "max_turns": 32
     },
     {
       "key": "sahibinden",

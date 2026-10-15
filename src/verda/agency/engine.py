@@ -128,7 +128,8 @@ class AgentEngine:
                 context['tools'] = [{**self.registry.tools[k].model_dump(exclude={'command', 'server_url'}),
                                      'connected': self.registry.available(k)} for k in agent.tools]
                 context['delegates'] = [{'key': k, 'description': self.registry.agents[k].description} for k in agent.delegates]
-                context = __import__('verda.agency.compact', fromlist=['x']).fit_context(context)
+                compact = __import__('verda.agency.compact', fromlist=['x'])
+                context = compact.fit_context(context, compact.budget_for(agent.prompt + '\n\n' + PROTOCOL))
                 provider = self.providers.get(agent.model.provider)
                 if provider is None:
                     raise ValueError('provider_not_registered')

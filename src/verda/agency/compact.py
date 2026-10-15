@@ -80,8 +80,22 @@ def batch_progress(inputs, events):
 
 
 def fit_context(context, budget=CONTEXT_BUDGET):
-    """Drop the oldest history entries until the whole context fits the budget."""
+    """Drop the oldest history entries until the whole context fits the budget; if it still does not fit, the older delivered records and
+    record reads go too, each marked `*_omitted` so the agent knows it has not seen them (the protocol tells it not to assume otherwise)."""
     history = list(context.get('history', []))
     while history and _size({**context, 'history': history}) > budget:
         history.pop(0)
-    return {**context, 'history': history}
+    out = {**context, 'history': history}
+    for key in ('record_reads', 'received_records'):          # newest first in received_records: the oldest is the last
+        items = list(out.get(key) or [])
+        while items and _size(out) > budget:
+            items.pop(-1 if key == 'received_records' else 0)
+            out = {**out, key: items, key + '_omitted': True}
+    return out
+
+
+def budget_for(instructions, limit=65536, margin=1500):
+    """What is left for the context once the agent's own instructions are counted (the provider refuses more than 64 KiB in all).
+    A fixed budget was right while prompts were short; the manager's prompt grew to 12 KB and two runs failed on 15 Oct 2026."""
+    import json
+    return min(CONTEXT_BUDGET, limit - len(json.dumps(instructions, ensure_ascii=False).encode()) - margin)

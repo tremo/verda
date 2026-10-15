@@ -176,3 +176,31 @@ def test_a_parcels_outline_travels_wrapped_because_firestore_takes_no_array_in_a
     points = shape['geometry']['coordinates'][0]['items']
     assert [p['items'] for p in points] == ring and shape['geometry']['type'] == 'Polygon'
     assert projection.parcel_shape(store, 'L2') is None and projection.parcel_shape(store, 'NONE') is None      # too few points / nothing looked up
+
+
+def test_the_remote_document_list_is_read_once_a_day_and_deletions_come_from_what_was_published(tmp_path, monkeypatch):
+    # Listing the collection every five minutes cost ~60k reads a day, over Firestore's free quota (14-15 Oct 2026).
+    calls = []
+    manifest, fs = tmp_path / 'm.json', FakeFirestore(existing=['A', 'B'])
+    fs.list_ids = lambda collection: calls.append(collection) or list(fs.existing)
+    monkeypatch.setattr(projection, 'build', lambda *a, **k: docs('A', 'B'))
+    sync.sync(None, fs, manifest_path=manifest, now=1000.0)
+    assert len(calls) == 1                                                      # first round: reconcile with the remote list
+    monkeypatch.setattr(projection, 'build', lambda *a, **k: docs('A'))
+    second = sync.sync(None, fs, manifest_path=manifest, now=1300.0)
+    assert len(calls) == 1 and second['deleted'] == 1                          # B, which we published, is gone: deleted without listing
+    sync.sync(None, fs, manifest_path=manifest, now=1000.0 + 86401)
+    assert len(calls) == 2                                                      # a day later the remote list is read again
+
+
+def test_a_quota_stop_reaches_the_watchdog_with_its_reason(tmp_path):
+    from verda.agency import watchdog
+
+    class Store:
+        path = tmp_path / 'agency.sqlite'
+    sync.record_status(Store, {'documents': 1}, wait=300, now=1000.0)
+    sync.record_status(Store, {'error': 'RuntimeError:firestore_http_429'}, wait=600, now=4000.0)
+    found = watchdog.publisher_silent(Store, 'local', 4000.0)
+    assert found[0]['severity'] == 'action' and found[0]['title'] == 'Pano 50 dakikadır güncellenmedi' and 'kotası doldu' in found[0]['detail']
+    sync.record_status(Store, {'documents': 1}, wait=300, now=4300.0)
+    assert watchdog.publisher_silent(Store, 'local', 4300.0) == []

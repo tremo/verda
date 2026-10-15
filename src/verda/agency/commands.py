@@ -87,6 +87,9 @@ def add_commands(parser, commands):
     event.add_argument('--request-key', required=True)
 
 
+FEEDBACK_EVERY_ROUNDS = 3          # the dashboard's corrections are read every third round (15 min): one read per feedback document each time
+
+
 def run(args):
     config = AgencyConfig.load(args.agency_config)
     store = AgencyStore(args.agency_db, config, supervisor_agent=args.supervisor_agent or None)
@@ -148,19 +151,27 @@ def run(args):
         import time as _time
         from verda.publish.firestore import Firestore
         from verda.publish.sync import sync
+        from verda.publish.sync import record_status
         firestore = Firestore()
+        rounds, backoff = 0, 0
         while True:
             try:
                 result = sync(store, firestore, dry_run=args.dry_run)
-                if not args.dry_run:
+                if not args.dry_run and rounds % FEEDBACK_EVERY_ROUNDS == 0:
                     from verda.publish.feedback import import_feedback
                     result.update(import_feedback(store, firestore))               # the owner's corrections on the dashboard flow back as user facts
-            except Exception as error:                      # one failed round never stops the service; it is retried on the next one
+                backoff = 0
+            except Exception as error:                      # one failed round never stops the service; it is retried later
                 result = {'error': type(error).__name__ + ':' + str(error)[:80]}
+                # 429 is Firestore saying "too much" (the daily free quota): slow down, doubling the wait up to an hour, never hammer it.
+                backoff = min(3600, max(args.every, backoff * 2)) if 'firestore_http_429' in result['error'] else 0
+            rounds += 1
             if not args.every:
                 return result
-            print(json.dumps(result, ensure_ascii=False), flush=True)
-            _time.sleep(args.every)
+            if not args.dry_run:
+                record_status(store, result, wait=backoff or args.every)
+            print(json.dumps({**result, **({'backoff_seconds': backoff} if backoff else {})}, ensure_ascii=False), flush=True)
+            _time.sleep(backoff or args.every)
     if command == 'agency-source-resume':
         store.resolve_source(args.incident_id,args.note)
         return {'resolved':args.incident_id}

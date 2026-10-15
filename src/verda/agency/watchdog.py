@@ -228,11 +228,21 @@ def stale_listings(store, mode, now):
 
 def publisher_silent(store, mode, now):
     """The dashboard is fed: the publisher wrote within the last twenty minutes."""
+    status = Path(store.path).parent / 'publisher-status.json'
     manifest = Path(store.path).parent / 'firestore-manifest.json'
-    if not manifest.exists():
+    try:
+        last = json.loads(status.read_text())
+    except (OSError, ValueError):
+        last = None
+    if last is None and not manifest.exists():
         return []
-    age = now - manifest.stat().st_mtime
-    return [_finding('publisher_silent', WARN, f'Pano {age / 60:.0f} dakikadır güncellenmedi', 'Pano yayıncısı çalışmıyor ya da yazamıyor; panodaki bilgiler eski.')] if age > PUBLISH_SILENCE else []
+    ok_at = (last or {}).get('last_ok_at') or (manifest.stat().st_mtime if manifest.exists() else 0)
+    if now - ok_at <= PUBLISH_SILENCE:
+        return []
+    error = (last or {}).get('error') or ''
+    why = ('Firestore kotası doldu (429): yayıncı bekleme süresini artırarak yeniden deniyor; kota her gün 10:00 civarı (İstanbul) yenilenir. '
+           'Kota doluyken pano da veri okuyamaz.') if '429' in error else f'Son hata: {error}.' if error else 'Pano yayıncısı çalışmıyor olabilir.'
+    return [_finding('publisher_silent', ACTION if '429' in error else WARN, f'Pano {(now - ok_at) / 60:.0f} dakikadır güncellenmedi', why + ' Panodaki bilgiler eski.')]
 
 
 def worker_silent(store, mode, now):

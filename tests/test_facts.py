@@ -1156,3 +1156,13 @@ def test_ilgilenmiyorum_on_the_dashboard_is_the_users_elimination():
     assert decisions({'decision': 'excluded', 'updatedAt': 't1'}) == [('user_excluded', True, 'decision=excluded@t1', 'dashboard')]
     assert decisions({'decision': 'shortlist', 'updatedAt': 't2'}) == [('user_excluded', False, 'decision=shortlist@t2', 'dashboard')]
     assert decisions({'note': 'sadece not', 'updatedAt': 't3'}) == []
+
+
+def test_a_stated_list_of_parcels_is_verified_like_any_statement_and_an_open_review_does_not_hold_an_official_lookup():
+    from verda.facts.action import next_action
+    text = 'Satılık arsa. *121 Ada 9 Parsel ve 121 Ada 6 Parsel* olmak üzere toplam iki parsel bulunmaktadır.'
+    got = verify(propose('sale_parcels', ['121/9', '121/6'], quote='121 Ada 9 Parsel ve 121 Ada 6 Parsel* olmak üzere toplam iki parsel bulunmaktadır',
+                         source_ref='description'), obs(payload=listing_payload(description=text)))
+    assert got.status == 'accepted' and got.grade == 'beyan'
+    out = assemble([claim('parcel_key', '881/14', 'kullanici', seq=1, kind='user'), bound('sale_area_m2', 221.84, 'resmi', seq=2, parcel='894/3')])
+    assert next_action(None, out, {'listing_read': True, 'tkgm_looked_up': True}, 1, None)['action'] == 'tkgm.lookup'

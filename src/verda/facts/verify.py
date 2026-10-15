@@ -13,7 +13,7 @@ from verda.facts.model import (EXCLUDING, FIELDS, LISTING, SEARCH, SOURCE_KIND, 
                                TOOL_GRADE, Proposal, Verdict, accept, reject, review, validate_value)
 from verda.facts.text import MAX_QUOTE, MIN_QUOTE, fold, has_ellipsis, is_hedged, locate
 
-VERIFIER = 'v2'          # v2 (15 Oct 2026): typo-tolerant sit kinds, a general "sit" covers both kinds
+VERIFIER = 'v3'          # v2: typo-tolerant sit kinds, a general "sit" covers both; v3: a natural-only answer means no archaeological sit
 
 
 def payload_listing_ids(tool: str, payload: Any):
@@ -156,7 +156,10 @@ def verify(p: Proposal, observation: dict | None) -> Verdict:
         if failed:
             return failed
         natural, archaeological, general = sit_kinds(fold(p.quote))
-        if not general and ((p.field == 'archaeological_sit' and natural and not archaeological) or
+        # The user's rule (15 Oct 2026): a sit answer that speaks only of natural sit says there is no archaeological sit. The other way
+        # round it settles nothing (natural sit is also read from the official map), and an archaeological "yes" needs its own words.
+        silent_on_archaeology = p.field == 'archaeological_sit' and p.value is False
+        if not general and ((p.field == 'archaeological_sit' and natural and not archaeological and not silent_on_archaeology) or
                             (p.field == 'natural_sit' and archaeological and not natural)):
             return review('sit_type_unclear')      # the words speak only of the other kind: a person decides, the model is not simply refused
         if is_hedged(sentence):

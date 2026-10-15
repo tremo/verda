@@ -1035,7 +1035,9 @@ def test_a_plain_no_natural_sit_means_none_and_a_wrong_enum_value_names_the_allo
 
 
 def test_a_quote_about_the_other_sit_type_goes_to_review_and_an_ordinary_doğal_is_not_a_sit_claim():
-    held = verify(propose('archaeological_sit', False, quote='doğal sit yoktur', source_ref='message:m2'), thread(seller('Doğal sit yoktur.')))
+    # the user's rule (15 Oct 2026): an answer about natural sit only means no archaeological sit; it never means there is one
+    assert verify(propose('archaeological_sit', False, quote='doğal sit yoktur', source_ref='message:m2'), thread(seller('Doğal sit yoktur.'))).status == 'accepted'
+    held = verify(propose('archaeological_sit', True, quote='doğal sit vardır', source_ref='message:m2'), thread(seller('2. derece doğal sit vardır.')))
     assert (held.status, held.reason) == ('needs_review', 'sit_type_unclear')
     held = verify(propose('natural_sit', 'none', quote='arkeolojik sit yoktur', source_ref='message:m2'), thread(seller('Arkeolojik sit yoktur.')))
     assert (held.status, held.reason) == ('needs_review', 'sit_type_unclear')
@@ -1172,7 +1174,9 @@ def test_a_stated_list_of_parcels_is_verified_like_any_statement_and_an_open_rev
     ('herhangi bir doğal ve alkolojik sit yoktur', 'archaeological_sit', 'accepted'),     # a seller's typo: the model read it right
     ('Herhangi bir arkeolojik ya da sitte değildir', 'natural_sit', 'accepted'),          # "neither archaeological nor any sit"
     ('Arkolojik sit alanı değil', 'archaeological_sit', 'accepted'),
-    ('Doğal sit alanı değildir', 'archaeological_sit', 'needs_review'),                   # only the other kind is named
+    ('Doğal sit alanı değildir', 'archaeological_sit', 'accepted'),                       # the user's rule: natural only -> no archaeological sit
+    ('Burada 2.derece doğal sit bulunmaktadır', 'archaeological_sit', 'accepted'),
+    ('Teyid ettim, teyit ettim sit bulunmuyor', 'natural_sit', 'accepted'),               # a confirmation is not a hedge
     ('Arkeolojik sit yoktur', 'natural_sit', 'needs_review'),
     ('Ekolojik açıdan sit alanı yoktur', 'archaeological_sit', 'accepted'),              # "ekolojik" is no kind of sit: a general sit
 ])

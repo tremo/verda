@@ -13,7 +13,7 @@ from verda.facts.model import (EXCLUDING, FIELDS, LISTING, SEARCH, SOURCE_KIND, 
                                TOOL_GRADE, Proposal, Verdict, accept, reject, review, validate_value)
 from verda.facts.text import MAX_QUOTE, MIN_QUOTE, fold, has_ellipsis, is_hedged, locate
 
-VERIFIER = 'v1'
+VERIFIER = 'v2'          # v2 (15 Oct 2026): typo-tolerant sit kinds, a general "sit" covers both kinds
 
 
 def payload_listing_ids(tool: str, payload: Any):
@@ -89,6 +89,36 @@ def _check_quote(p: Proposal, observation: dict) -> tuple[Verdict | None, str | 
     return reject('quote_not_in_source'), None
 
 
+KIND_WORDS = (('arkeolojik', 'archaeological', 0.82), ('doğal', 'natural', 0.8))
+
+
+def _kind_of(token):
+    """Which sit kind a word names, typos included ("alkolojik", "arkolojik"): close to the word, but not "ekolojik" or "jeolojik"."""
+    from difflib import SequenceMatcher
+    for word, kind, least in KIND_WORDS:
+        if len(token) >= 4 and SequenceMatcher(None, token, word).ratio() >= least:
+            return kind
+    return None
+
+
+def sit_kinds(quoted):
+    """(natural, archaeological, general) named by a folded quote. The model reads the meaning; this only stops it from carrying an answer
+    about one kind of sit over to the other. "doğal" counts only near "sit" ("doğal konumunda zeytinlik" is just an adjective); a "sit"
+    word not right after a kind word ("arkeolojik ya da sitte değildir", "sit yok") speaks of every kind."""
+    tokens = re.findall(r'\w+', quoted)
+    natural = archaeological = general = False
+    for i, token in enumerate(tokens):
+        kind = _kind_of(token)
+        if kind == 'archaeological':
+            archaeological = True
+        if token.startswith('sit') and not token.startswith('site'):
+            near = [_kind_of(t) for t in tokens[max(0, i - 4):i]]
+            natural = natural or 'natural' in near
+            archaeological = archaeological or 'archaeological' in near
+            general = general or not near or near[-1] is None
+    return natural, archaeological, general
+
+
 def verify(p: Proposal, observation: dict | None) -> Verdict:
     spec = FIELDS.get(p.field)
     if spec is None:
@@ -125,13 +155,10 @@ def verify(p: Proposal, observation: dict | None) -> Verdict:
         failed, sentence = _check_quote(p, observation)
         if failed:
             return failed
-        quoted = fold(p.quote)
-        # "doğal" counts only next to "sit" ("doğal sit", "doğal ve arkeolojik sit"): in "doğal konumunda zeytinlik" it is just an adjective.
-        natural = bool(re.search(r'doğal(?:\s+\S+){0,3}\s+sit', quoted))
-        archaeological = bool(re.search(r'arkeolojik(?:\s+\S+){0,3}\s+sit|arkeolojik', quoted))
-        if (p.field == 'archaeological_sit' and natural and not archaeological) or \
-           (p.field == 'natural_sit' and archaeological and not natural):
-            return review('sit_type_unclear')      # the words speak of the other kind (or a general "sit"): a person decides, the model is not simply refused
+        natural, archaeological, general = sit_kinds(fold(p.quote))
+        if not general and ((p.field == 'archaeological_sit' and natural and not archaeological) or
+                            (p.field == 'natural_sit' and archaeological and not natural)):
+            return review('sit_type_unclear')      # the words speak only of the other kind: a person decides, the model is not simply refused
         if is_hedged(sentence):
             return review('hedged')
     if model and not isinstance(p.value, list) and (p.field, p.value) in EXCLUDING and p.subject != 'this_parcel':      # a list (sale_parcels) never excludes

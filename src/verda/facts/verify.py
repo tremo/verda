@@ -134,7 +134,7 @@ def verify(p: Proposal, observation: dict | None) -> Verdict:
             return review('sit_type_unclear')      # the words speak of the other kind (or a general "sit"): a person decides, the model is not simply refused
         if is_hedged(sentence):
             return review('hedged')
-    if model and (p.field, p.value) in EXCLUDING and p.subject != 'this_parcel':
+    if model and not isinstance(p.value, list) and (p.field, p.value) in EXCLUDING and p.subject != 'this_parcel':      # a list (sale_parcels) never excludes
         return review('subject_not_this_parcel')
     return accept(TOOL_GRADE[tool])
 

@@ -879,7 +879,7 @@ def run_worker(store, *, env_file=None, continuous=False, reader=None, visible=F
         fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
         with os.fdopen(fd, 'w') as out:
             json.dump({'checked_at':time.time(), 'reason':reason}, out)
-    last_tidy = [0.0]
+    last_tidy, last_beat = [0.0], [0.0]
 
     def housekeeping():
         """Between jobs: close tabs a failed run left behind, and sign in again if the session was lost."""
@@ -909,6 +909,10 @@ def run_worker(store, *, env_file=None, continuous=False, reader=None, visible=F
                 housekeeping()
                 # A service: stay idle (Chrome untouched) until a job waits, then connect, opening Chrome if it is closed.
                 if not bridge.has_queued():
+                    if time.time() - last_beat[0] > 20:
+                        # Idle is not absent: without this the panel showed "Bağlantı bekliyor" while the worker was running.
+                        bridge.attach(worker, 'Browser Use · Jev Ultrafast', driver='jev', ttl=30)
+                        last_beat[0] = time.time()
                     time.sleep(5)
                     continue
                 if not online():

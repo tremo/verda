@@ -21,7 +21,7 @@ def worker_health(store, worker_id, mode, state, error=None, now=None):
 def inspect_health(store):
     now=time.time();error=None
     try:
-        con=sqlite3.connect(store.path.as_uri()+'?mode=rw',uri=True,timeout=.2)
+        con=sqlite3.connect(store.path.as_uri()+'?mode=rw',uri=True,timeout=1.0)    # a writer's turn is short; 0.2 s raised false alarms
         try:
             con.execute('BEGIN IMMEDIATE')
             version=con.execute('SELECT version FROM agency_meta').fetchone()[0]

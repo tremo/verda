@@ -83,6 +83,8 @@ class FactService:
                     'key': p.key, 'subject': p.subject, 'resolves': p.resolves, 'basis': p.basis}
         if p.proposer == 'user' or p.resolves:
             identity['at'] = now            # every user decision is an event; A, B, A must all count
+        if p.proposer.startswith('llm:'):
+            identity['verifier'] = VERIFIER  # when the acceptance rules change, a model's proposal is checked again, not answered from the old verdict
         claim_id = uuid4().hex
         source_ref = p.source_ref if observation or not p.observation_id else f'missing_observation:{p.observation_id}'
         cursor = con.execute('''INSERT OR IGNORE INTO claims(id,listing_ref,mode,field,value,scope,source_kind,key,observation_id,
@@ -254,8 +256,11 @@ class FactService:
 
     @staticmethod
     def review_items(con, listing_ref, mode) -> list[dict]:
+        # An item ends when it is answered, or when the same field later got an accepted value (the same answer, now verified).
         rows = con.execute('''SELECT * FROM claims c WHERE listing_ref=? AND mode=? AND status='needs_review'
-            AND NOT EXISTS (SELECT 1 FROM claims r WHERE r.resolves=c.id) ORDER BY seq''', (listing_ref, mode)).fetchall()
+            AND NOT EXISTS (SELECT 1 FROM claims r WHERE r.resolves=c.id)
+            AND NOT EXISTS (SELECT 1 FROM claims a WHERE a.listing_ref=c.listing_ref AND a.mode=c.mode AND a.field=c.field AND a.status='accepted' AND a.seq>c.seq)
+            ORDER BY seq''', (listing_ref, mode)).fetchall()
         return [decode_claim(r) for r in rows]
 
     def status(self, con, listing_ref, mode, *, legacy_lifecycle=None, policy: Policy | None = None) -> dict:

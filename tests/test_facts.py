@@ -1166,3 +1166,27 @@ def test_a_stated_list_of_parcels_is_verified_like_any_statement_and_an_open_rev
     assert got.status == 'accepted' and got.grade == 'beyan'
     out = assemble([claim('parcel_key', '881/14', 'kullanici', seq=1, kind='user'), bound('sale_area_m2', 221.84, 'resmi', seq=2, parcel='894/3')])
     assert next_action(None, out, {'listing_read': True, 'tkgm_looked_up': True}, 1, None)['action'] == 'tkgm.lookup'
+
+
+@pytest.mark.parametrize('quote,field,status', [
+    ('herhangi bir doğal ve alkolojik sit yoktur', 'archaeological_sit', 'accepted'),     # a seller's typo: the model read it right
+    ('Herhangi bir arkeolojik ya da sitte değildir', 'natural_sit', 'accepted'),          # "neither archaeological nor any sit"
+    ('Arkolojik sit alanı değil', 'archaeological_sit', 'accepted'),
+    ('Doğal sit alanı değildir', 'archaeological_sit', 'needs_review'),                   # only the other kind is named
+    ('Arkeolojik sit yoktur', 'natural_sit', 'needs_review'),
+    ('Ekolojik açıdan sit alanı yoktur', 'archaeological_sit', 'accepted'),              # "ekolojik" is no kind of sit: a general sit
+])
+def test_the_model_reads_typos_and_general_answers_and_code_only_stops_an_answer_about_the_other_kind(quote, field, status):
+    got = verify(propose(field, 'none' if field == 'natural_sit' else False, quote=quote, source_ref='message:m2'), thread(seller(quote + '.')))
+    assert got.status == status
+
+
+def test_a_later_accepted_value_closes_the_review_item_and_a_model_proposal_is_checked_again_under_new_rules(tmp_path):
+    store, registry = python_listing_store(tmp_path, [listing_payload()])
+    read(store, registry, 'listing')
+    with store.transaction() as con:
+        con.execute("INSERT INTO claims(id,listing_ref,mode,field,value,scope,source_kind,subject,proposer,status,grade,reason,verifier,created_at,dedupe_key) "
+                    "VALUES('old','" + ID + "','local','archaeological_sit','false','listing','thread','this_parcel','llm:manager','needs_review',NULL,'sit_type_unclear','v1',1,'d-old')")
+        assert [c['id'] for c in store.facts.review_items(con, ID, 'local')] == ['old']
+        store.facts.decide(con, ID, 'local', 'archaeological_sit', False, 'satıcı yazım hatası', 2.0)
+        assert store.facts.review_items(con, ID, 'local') == []

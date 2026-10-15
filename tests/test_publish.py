@@ -204,3 +204,9 @@ def test_a_quota_stop_reaches_the_watchdog_with_its_reason(tmp_path):
     assert found[0]['severity'] == 'action' and found[0]['title'] == 'Pano 50 dakikadır güncellenmedi' and 'kotası doldu' in found[0]['detail']
     sync.record_status(Store, {'documents': 1}, wait=300, now=4300.0)
     assert watchdog.publisher_silent(Store, 'local', 4300.0) == []
+
+
+def test_an_area_in_dispute_is_published_with_both_numbers():
+    current = {'conflicts': ['sale_scope'], 'listing_errors': [{'field': 'sale_area_m2', 'chosen': {'value': 678.02, 'grade': 'resmi'}, 'other': {'value': 3260.0, 'grade': 'beyan'}}]}
+    assert projection.area_conflict(current) == {'statedM2': 3260.0, 'officialM2': 678.02}
+    assert projection.area_conflict({'conflicts': [], 'listing_errors': current['listing_errors']}) is None

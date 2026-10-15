@@ -91,6 +91,17 @@ def opp_view(new):
             'fairUnitPrice': new['fair_unit_price'], 'road': new['road'], 'caps': new['caps'], 'parts': new['parts']}
 
 
+def area_conflict(current):
+    """The advertised and the official area when they are too far apart to be the same sale (facts.assemble's `sale_scope` conflict):
+    the dashboard then shows the advertised area, names the official one and says why the listing waits for the user."""
+    if 'sale_scope' not in (current.get('conflicts') or []):
+        return None
+    for e in current.get('listing_errors') or []:
+        if e.get('field') == 'sale_area_m2':
+            return {'statedM2': e['other']['value'], 'officialM2': e['chosen']['value']}
+    return None
+
+
 def listing_document(store, row, now_iso, *, mode='local', new=None):
     current = fact_status(store, row['listing_id'], mode=mode)
     built = learning.learning(store, row['listing_id'], learning.unknown_fields(current), current.get('next_action'), learning.context_of(current), mode=mode)
@@ -115,6 +126,7 @@ def listing_document(store, row, now_iso, *, mode='local', new=None):
         'thread': thread_of(store, row['listing_id'], mode),
         'proposals': proposals_of(store, row['listing_id'], mode),
         'opp': opp_view(new) if new else None,
+        'areaConflict': area_conflict(current),
         'photos': photo_ids(store, row['listing_id'], mode),
         **(parcel_shape(store, row['listing_id'], mode) or {}),
         'updatedAt': now_iso,

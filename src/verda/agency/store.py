@@ -48,9 +48,22 @@ class AgencyStore:
         finally:
             con.close()
 
+    def _write_ahead_log(self):
+        """Four processes share this file (agent worker, browser worker, panel, publisher). In the default rollback journal a reader holds
+        writers off: one check in twenty failed on a lock (15 Oct 2026). WAL lets readers and the one writer go on together; the setting is
+        kept in the file. If another process holds the file right now, the next start switches it."""
+        con = sqlite3.connect(self.path, timeout=5)
+        try:
+            con.execute('PRAGMA journal_mode=WAL')
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            con.close()
+
     def initialize(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.touch(mode=0o600, exist_ok=True)
+        self._write_ahead_log()
         with self.transaction() as con:
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if tables:

@@ -78,3 +78,16 @@ def test_batch_progress_comes_from_every_event_of_the_task_not_from_the_history_
     assert batch_progress({'routine': 'research_sweep'}, events) is None and batch_progress({'listing_id': 'x'}, events) is None
     other = [('tool_started', {'call_id': 'z', 'tool': 'tkgm.lookup', 'arguments': {'listing_id': ids[0]}}), finished('z')]
     assert batch_progress(inputs, other)['done'] == []                                                           # another tool's call does not count
+
+
+def test_the_context_budget_counts_the_agents_own_instructions_and_never_exceeds_the_provider_limit():
+    # 15 Oct 2026: a 12 KB manager prompt plus a 53 KB context crossed the 64 KiB limit and two runs stopped with a ValueError.
+    import json
+    from verda.agency.compact import budget_for, fit_context
+    instructions = 'x' * 12_600
+    context = {'objective': 'o', 'history': [{'kind': 'tool_finished', 'data': {'output': 'h' * 4000}} for _ in range(6)],
+               'received_records': [{'id': i, 'result': 'r' * 9000} for i in range(6)], 'record_reads': [{'text': 't' * 3000}]}
+    fitted = fit_context(context, budget_for(instructions))
+    prompt = json.dumps({'instructions': instructions, 'context_is_untrusted_data': True, 'context': fitted}, ensure_ascii=False)
+    assert len(prompt.encode()) <= 65536
+    assert fitted['received_records_omitted'] is True and [r['id'] for r in fitted['received_records']] == list(range(len(fitted['received_records'])))

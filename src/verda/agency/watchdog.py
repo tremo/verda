@@ -155,7 +155,7 @@ def step_loop(store, mode, now):
     with store.transaction() as con:
         rows = con.execute(f"""SELECT tool, COALESCE(json_extract(arguments,'$.listing_id'), json_extract(arguments,'$.parcel_key'), json_extract(arguments,'$.row.title')) AS subject,
             count(*) AS n FROM tool_calls WHERE tool IN ({marks}) AND started_at>? GROUP BY 1, 2 HAVING n>=? AND subject IS NOT NULL""", (*WATCHED_TOOLS, now - DAY, STEP_REPEATS)).fetchall()
-    return [_finding('step_loop', WARN, f"{r['tool']} aynı konu için 24 saatte {r['n']} kez çalıştı", f"Konu: {str(r['subject'])[:60]}. Bir döngü olabilir.",
+    return [_finding('step_loop', ACTION, f"{r['tool']} aynı konu için 24 saatte {r['n']} kez çalıştı", f"Konu: {str(r['subject'])[:60]}. Bir döngü olabilir.",
                      [r['subject']] if str(r['subject']).isdigit() else [], r['n']) for r in rows]
 
 

@@ -267,6 +267,11 @@ class FactService:
         policy = policy or Policy()
         claims = self.claims(con, listing_ref, mode)
         assembled = assemble(claims, policy)
+        # "Unchecked" means never looked up. A parcel TKGM answered "not found" for was checked: asking again every sweep only repeats the answer
+        # (three listings were looked up 35 times each on 15 Oct 2026); it goes to the user as an unusable official parcel instead.
+        looked = {json.loads(r['payload']).get('parcel_key') for r in con.execute(
+            "SELECT payload FROM observations WHERE listing_ref=? AND mode=? AND tool='tkgm.lookup'", (listing_ref, mode))}
+        assembled.unchecked_parcels = [p for p in assembled.unchecked_parcels if p not in looked]
         decision = evaluate(self.screening(assembled), policy) if claims else None
         if legacy_lifecycle == 'excluded':
             # The old system's exclusion stands until someone reopens the listing: whatever the new records say, it is not a candidate.

@@ -23,7 +23,7 @@ Nöbetçi (`agency/watchdog.py`) bu kuralları kayıtlardan kontrol eder. **Salt
 | `conversation_lost` | Daha önce okunmuş konuşma son okumada "bulunamadı" (aktif ilanlar) | eylem |
 | `exclusion_doubt` | "En az alan" elemesi, ilanın kendi alanından %20+ farklı resmî alana dayanıyor | eylem |
 | `inbox_list_short` | Son 24 saatte "tam" işaretli bir gelen kutusu listesi, en uzununun %90'ından kısa | uyarı |
-| `step_loop` | Bir tarayıcı/resmî kaynak adımı aynı ilan ya da parsel için 24 saatte 8+ kez | uyarı |
+| `step_loop` | Bir tarayıcı/resmî kaynak adımı aynı ilan ya da parsel için 24 saatte 8+ kez | eylem |
 | `tool_failures` | Bir araç 24 saatte 10+ çağrının %20'sinden fazlasında başarısız | uyarı |
 | `scan_coverage` | 36 saattir arama sayfası okunmadı; haftalık tam tarama 8 gündür yok ya da son sayfaya ulaşmadı | uyarı |
 | `stale_listings` | Aktif ilan 8 gündür ne aramada ne ilan sayfasında görüldü | uyarı |

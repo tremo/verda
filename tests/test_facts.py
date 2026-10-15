@@ -1190,3 +1190,17 @@ def test_a_later_accepted_value_closes_the_review_item_and_a_model_proposal_is_c
         assert [c['id'] for c in store.facts.review_items(con, ID, 'local')] == ['old']
         store.facts.decide(con, ID, 'local', 'archaeological_sit', False, 'satıcı yazım hatası', 2.0)
         assert store.facts.review_items(con, ID, 'local') == []
+
+
+def test_a_parcel_tkgm_does_not_know_is_asked_once_and_then_goes_to_the_user(tmp_path):
+    # 15 Oct 2026: three listings whose parcel TKGM answers "not found" were looked up 35 times each, every sweep
+    import urllib.error
+    def missing(url):
+        if '/parsel/' in url:
+            raise urllib.error.HTTPError(url, 404, 'not found', {}, None)
+        return fake_net(parcel_feature())(url)
+    store, registry = python_listing_store(tmp_path, [listing_payload()], extra={'tkgm.lookup': client(tmp_path / 'nf', fetch=missing).lookup})
+    read(store, registry, 'listing')
+    assert status(store)['next_action']['action'] == 'tkgm.lookup'
+    read(store, registry, 'tkgm', tool='tkgm.lookup', agent='parcel', start=10, inputs={'parcel_key': '123/45', 'neighborhood': 'Kızlan'})
+    assert status(store)['next_action'] == {'action': 'human_review', 'why': 'official_parcel_not_found_or_unusable', 'also': status(store)['next_action'].get('also')}

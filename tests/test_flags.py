@@ -59,3 +59,14 @@ def test_a_flag_ends_when_the_user_settles_the_field_or_closes_it(tmp_path):
         assert open_flags(con, '1000000001', 'local') == []
         with pytest.raises(ValueError):
             close_flag(con, b['flag_id'], 'tekrar')
+
+
+def test_a_bare_or_wrong_message_id_does_not_refuse_a_quote_that_is_in_the_sellers_message(tmp_path):
+    # 15 Oct 2026: 32 true flags were refused because the reader wrote the id without "message:"
+    store = _store(tmp_path)
+    oid = _thread(store)
+    base = dict(listing_ref='1000000001', mode='local', field='access', observation_id=oid, quote='yolu var', note='Hangi yol olduğu belli değil.', now=10.0)
+    with store.transaction() as con:
+        assert raise_flag(con, **base, source_ref='bb0000000002')['status'] == 'flagged'
+        assert raise_flag(con, **base, source_ref='message:ffffffffffff')['status'] == 'exists'           # the same note, found in the seller's message
+        assert raise_flag(con, **{**base, 'quote': 'Kadastral yol cephesi'}, source_ref='aa0000000001')['reason'] == 'quote_not_in_source'   # still never our own words

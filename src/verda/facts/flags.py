@@ -33,9 +33,16 @@ def raise_flag(con, *, listing_ref, mode, field, observation_id, source_ref, quo
     if row is None or row['mode'] != mode or row['listing_ref'] != listing_ref:
         return {'status': 'rejected', 'reason': 'observation_not_of_this_listing'}
     import json
-    texts = [t for t in source_texts(row['tool'], json.loads(row['payload'])) if t['ref'] == source_ref]
-    if not texts or (row['tool'] == THREAD and texts[0]['role'] != 'seller') or locate(quote, texts[0]['text']) is None:
+    every = source_texts(row['tool'], json.loads(row['payload']))
+    ref = source_ref if source_ref.startswith(('message:', 'attributes.')) or source_ref in ('title', 'description', 'page_text') else 'message:' + source_ref
+    named = [t for t in every if t['ref'] == ref]
+    # A bare or wrong message id is the reader's slip, not a lie about the text (32 true flags were refused on 15 Oct 2026 for a missing
+    # "message:" prefix): the quote is looked up, word for word, in the seller's messages of this very record, exactly as for a fact.
+    candidates = named if named and locate(quote, named[0]['text']) is not None else [t for t in every if locate(quote, t['text']) is not None]
+    texts = [t for t in candidates if row['tool'] != THREAD or t['role'] == 'seller']
+    if not texts:
         return {'status': 'rejected', 'reason': 'quote_not_in_source'}
+    source_ref = texts[0]['ref']
     _ensure(con)
     old = con.execute('SELECT id FROM listing_flags WHERE listing_ref=? AND mode=? AND field=? AND source_ref=? AND observation_id=? AND closed_at IS NULL',
                       (listing_ref, mode, field, source_ref, observation_id)).fetchone()

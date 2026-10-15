@@ -207,7 +207,10 @@ def build(store, *, mode='local', now=None, limit=1000):
     by_state = {}
     for _, _, d in docs:
         by_state[d['state']] = by_state.get(d['state'], 0) + 1
-    status = {'generatedAt': now_iso, 'recordCount': len(docs), 'byState': by_state, 'total': ranked['total'], 'settled': ranked['settled'], 'schemaVersion': 1}
+    with store.transaction() as con:
+        scanned = con.execute("SELECT max(captured_at) FROM observations WHERE tool='sahibinden.search' AND mode=?", (mode,)).fetchone()[0]
+    status = {'generatedAt': now_iso, 'recordCount': len(docs), 'byState': by_state, 'total': ranked['total'], 'settled': ranked['settled'], 'schemaVersion': 1,
+              'lastScanAt': iso(scanned)}           # the dashboard's header says when listings were last searched, not only when this was written
     from verda.publish import status as status_page
     return docs + [('meta', 'v2', status), ('meta', 'v2status', status_page.build(store, mode=mode, now=now, problems=problems))]
 

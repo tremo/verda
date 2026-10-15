@@ -32,12 +32,16 @@ def _field_grades() -> dict[str, tuple[str, ...]]:
         "access": _SIT,
         "route_minutes": ("resmi", "bagimsiz"),
         "destination_verified": ("kullanici", "resmi"),
+        "sale_parcels": ("kullanici", "resmi", "beyan"),
+        "parcel_area_m2": ("resmi",),
+        "user_excluded": ("kullanici",),
+        "scope_question": ("kullanici",),
     }
 
 
 class Policy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    version: str = "datca-2026-10-07.3"
+    version: str = "datca-2026-10-15.1"
     max_price_tl: int = 15_000_000
     min_area_m2: int = 1_000
     max_route_minutes: int = 45
@@ -62,6 +66,7 @@ class ScreeningFacts(BaseModel):
     access: Literal["direct", "existing_easement", "corridor_conditional", "none", "unknown"] = "unknown"
     route_minutes: list[FiniteFloat] = Field(default_factory=list)
     destination_verified: bool = False
+    user_excluded: bool = False
     conflicts: list[str] = Field(default_factory=list)
     # Each asserted field must cite evidence before this pure evaluator accepts it.
     evidence_refs: dict[str, list[str]] = Field(default_factory=dict)
@@ -77,6 +82,7 @@ class ScreeningFacts(BaseModel):
             "route_minutes": bool(self.route_minutes),
             "destination_verified": self.destination_verified,
             "sale_scope_resolved": self.sale_scope_resolved,
+            "user_excluded": self.user_excluded,
         }
 
     @model_validator(mode="after")
@@ -121,6 +127,8 @@ def evaluate(facts: ScreeningFacts, policy: Policy | None = None) -> Decision:
         hard.append("first_degree_natural_sit")
     if facts.access == "none":
         hard.append("no_access")
+    if facts.user_excluded:
+        hard.append("user_excluded")          # the user looked and said no: nothing more is done for the listing
     if hard:
         return Decision(state="excluded", policy_version=policy.version, reasons=hard, conditions=conflicts)
     route_valid = facts.destination_verified and bool(facts.route_minutes)

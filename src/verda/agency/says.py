@@ -111,36 +111,76 @@ def classify(fractions):
     return 'boundary' if any(fractions.values()) else 'none'
 
 
-def parcel_ring(store, listing_id, mode):
-    """The outline from the newest TKGM lookup that has one."""
+def parcel_ring(store, listing_id, mode, parcel=None):
+    """The outline from the newest TKGM lookup that has one (of `parcel`, when named)."""
     with store.transaction() as con:
         rows = con.execute("SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at DESC, id DESC", (mode, listing_id)).fetchall()
     for row in rows:
         try:
-            geometry = json.loads(row['payload']).get('geometry') or {}
+            payload = json.loads(row['payload'])
         except ValueError:
             continue
+        if parcel and payload.get('parcel_key') != parcel:
+            continue
+        geometry = payload.get('geometry') or {}
         ring = geometry.get('ring')
         if geometry.get('type') == 'Polygon' and isinstance(ring, list) and len(ring) >= 4:
             return [[float(x), float(y)] for x, y in ring]
     return None
 
 
+def sale_parcels(store, listing_id, mode):
+    """The parcels of the sale as the facts stand (main first); empty when no parcel is known."""
+    from verda.agency.research import fact_status
+    facts = fact_status(store, listing_id, mode=mode).get('facts') or {}
+    main = (facts.get('parcel_key') or {}).get('value') if isinstance(facts.get('parcel_key'), dict) else None
+    listed = (facts.get('sale_parcels') or {}).get('value') if isinstance(facts.get('sale_parcels'), dict) else None
+    return ([main] if main else []) + [p for p in (listed or []) if p != main]
+
+
+ORDER = ('first', 'second', 'third', 'boundary', 'none')
+
+
 def check(store, args, mode='local', now=None, fetch=_get):
-    """Agent tool `sit.says`. Needs the parcel outline from `tkgm.lookup`; without it the answer says so and nothing is concluded."""
+    """Agent tool `sit.says`. Every parcel of the sale is overlaid; the most restrictive answer stands for the sale. Without the outline of
+    every parcel the answer says so and nothing is concluded."""
     listing = args['listing_id']
     now = time.time() if now is None else now
-    ring = parcel_ring(store, listing, mode)
-    base = {'listing_id': listing, 'source': LAYER_URL, 'layer': LAYER, 'observed_at': now}
-    if ring is None:
-        return {**base, 'classification': 'no_geometry'}
+    parcels = sale_parcels(store, listing, mode) or [None]
+    base = {'listing_id': listing, 'source': LAYER_URL, 'layer': LAYER, 'observed_at': now, **({'parcel_key': parcels[0]} if parcels[0] else {})}
+    rings = {p: parcel_ring(store, listing, mode, p) for p in parcels}
+    if any(r is None for r in rings.values()):
+        return {**base, 'classification': 'no_geometry', 'missing': [p for p, r in rings.items() if r is None and p]}
     cache = store.path.parent / (store.path.name + '.says-layer.json')
     data = layer(cache, now, fetch)
-    result = overlap(ring, data)
-    classification = classify(result['fractions'])
+    per = []
+    for p, ring in rings.items():
+        result = overlap(ring, data)
+        per.append((p, classify(result['fractions']), result))
+    parcel, classification, result = min(per, key=lambda x: ORDER.index(x[1]))
     strongest = {'first': '1.', 'second': '2.', 'third': '3.'}.get(classification)
     areas = [a for a in result['areas'] if strongest and str(a.get('SitDurum', '')).startswith(strongest)] if strongest else result['areas']
     return {**base, 'classification': classification, 'fractions': result['fractions'], 'samples': result['inside'], 'feature_count': len(data['features']),
             'layer_sha256': hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16],
+            **({'parcels': [{'parcel_key': p, 'classification': c, 'fractions': r['fractions']} for p, c, r in per]} if len(per) > 1 or per[0][0] else {}),
             'areas': [{'status': a.get('SitDurum'), 'decision_no': a.get('KararNo'), 'decision_date': a.get('KararTarih'), 'restrictions': a.get('Kisitlar'), 'share': a['share']}
                       for a in areas[:6]]}
+
+
+def stale(store, listing_id, mode, parcels):
+    """True when no sit overlay covers every parcel of the sale that has an official outline (none yet, or the parcels changed since)."""
+    with store.transaction() as con:
+        last = con.execute("SELECT payload, captured_at FROM observations WHERE tool='sit.says' AND mode=? AND listing_ref=? ORDER BY captured_at DESC, id DESC LIMIT 1",
+                           (mode, listing_id)).fetchone()
+        lookups = [(r['captured_at'], json.loads(r['payload'])) for r in con.execute(
+            "SELECT payload, captured_at FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at", (mode, listing_id))]
+    outlined = {p.get('parcel_key') for _, p in lookups if (p.get('geometry') or {}).get('ring')}
+    wanted = {p for p in parcels if p in outlined}
+    if last is None:
+        return bool(outlined)
+    payload = json.loads(last['payload'])
+    covered = {x['parcel_key'] for x in payload.get('parcels') or []} or {payload.get('parcel_key')}
+    if covered == {None}:                                # an overlay from before parcels were named: the main parcel looked up last before it
+        mains = [p.get('parcel_key') for at, p in lookups if at <= last['captured_at'] and p.get('found') and not p.get('part')]
+        covered = {mains[-1]} if mains else set()
+    return bool(wanted - covered)

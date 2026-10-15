@@ -6,10 +6,10 @@ import json
 import re
 import time
 
-FIELDS = ('parcel_key', 'natural_sit', 'archaeological_sit', 'access')
+FIELDS = ('parcel_key', 'natural_sit', 'archaeological_sit', 'access', 'sale_scope')
 # A field is only worth the agent's time when some seller message even mentions its subject. "A1", "D2" are the sit grades' short forms.
 SUBJECT = {'parcel_key': ('parsel', 'ada'), 'natural_sit': ('sit', 'd1', 'd2', 'd3'), 'archaeological_sit': ('sit', 'a1', 'a2', 'a3'),
-           'access': ('yol', 'cephe', 'cadde', 'sokak', 'geçiş', 'gecis')}
+           'access': ('yol', 'cephe', 'cadde', 'sokak', 'geçiş', 'gecis'), 'sale_scope': ('hisse', 'tapu', 'm2', 'm²', 'metrekare', 'dönüm', 'parsel')}
 WHOLE_WORDS = {'ada', 'a1', 'a2', 'a3', 'd1', 'd2', 'd3'}      # matched as words: "ada" is inside "kadastral"
 RETRY_AFTER = 86400
 STATE_KEY = 'replies:attempted'
@@ -64,7 +64,8 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
         from verda.facts.text import fold
         said = fold(' '.join(str(m['text']) for m in seller))
         words = set(re.findall(r'\w+', said))
-        missing = [f for f in FIELDS if f not in facts and (listing, f) not in flagged       # a flagged field waits for the user, not for another reading
+        scope_open = 'sale_scope' in (current.get('conflicts') or [])
+        missing = [f for f in FIELDS if (f not in facts if f != 'sale_scope' else scope_open) and (listing, f if f != 'sale_scope' else 'sale_scope_resolved') not in flagged
                    and any((w in words) if w in WHOLE_WORDS else (w in said) for w in map(fold, SUBJECT[f]))]
         if not missing:
             continue

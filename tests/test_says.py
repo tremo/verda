@@ -79,3 +79,31 @@ def test_the_official_sit_check_is_queued_before_any_question_goes_out(tmp_path)
     read(store, registry, 'sit', tool='sit.says', agent='parcel', start=20)
     after = work_queue(store, {}, mode='local')
     assert not any(g['action'] == 'sit.says' for g in after['groups'])
+
+
+def test_every_deed_of_a_sale_is_overlaid_and_a_changed_parcel_is_checked_again(tmp_path):
+    """A second deed (ring to the east) lies in a first-degree area: the sale is first degree although the main parcel is clear.
+    After the parcels change, the old overlay no longer covers the sale."""
+    east = [[27.7, 36.7], [27.8, 36.7], [27.8, 36.8], [27.7, 36.8], [27.7, 36.7]]
+    box = {}
+    store, registry = python_listing_store(tmp_path, [listing_payload()], extra={
+        'tkgm.lookup': lambda a: client(tmp_path / ('x' + a['parcel_key'].replace('/', '_')),
+                                        fetch=fake_net(parcel_feature(parsel=a['parcel_key'].split('/')[1], ring=east if a['parcel_key'] == '123/46' else None))).lookup(a),
+        'sit.says': lambda a: says.check(box['store'], a, now=5.0, fetch=lambda url: json.dumps(layer_of(area('1.Derece Doğal Sit Alanı', 27.65, 27.85, 36.65, 36.85))).encode())})
+    box['store'] = store
+    read(store, registry, 'listing')
+    read(store, registry, 'tkgm', tool='tkgm.lookup', agent='parcel', start=10, inputs={'parcel_key': '123/45', 'neighborhood': 'Kızlan'})
+    assert says.stale(store, ID, 'local', ['123/45']) is True                     # never checked
+    read(store, registry, 'sit', tool='sit.says', agent='parcel', start=20)
+    assert status(store)['facts']['natural_sit']['value'] == 'none' and says.stale(store, ID, 'local', ['123/45']) is False
+    with store.transaction() as con:
+        store.facts.decide(con, ID, 'local', 'sale_parcels', ['123/45', '123/46'], 'ikinci tapu', 30.0)
+    view = status(store)
+    assert view['parcels'] == ['123/45', '123/46'] and view['next_action'] == {'action': 'tkgm.lookup', 'why': 'sale_parcel_unchecked', 'parcel': '123/46', 'part': True}
+    read(store, registry, 'tkgm2', tool='tkgm.lookup', agent='parcel', start=40, inputs={'parcel_key': '123/46', 'neighborhood': 'Kızlan', 'part': True})
+    assert says.stale(store, ID, 'local', ['123/45', '123/46']) is True          # the sale grew: the earlier overlay does not cover it
+    read(store, registry, 'sit2', tool='sit.says', agent='parcel', start=50)
+    view = status(store)
+    assert view['decision']['state'] == 'excluded' and 'first_degree_natural_sit' in view['decision']['reasons']
+    total = view['facts']['sale_area_m2']
+    assert total['value'] == 3020.8 and total['source_ref'] == '123/45 + 123/46' and len(total['parts']) == 2      # 1510.40 per deed in the fake

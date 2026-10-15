@@ -11,7 +11,7 @@ from verda.facts.model import FIELDS, THREAD
 from verda.facts.verify import source_texts
 from verda.facts.text import locate
 
-CLARIFIABLE = ('access', 'archaeological_sit', 'natural_sit', 'parcel_key', 'shared_title')
+CLARIFIABLE = ('access', 'archaeological_sit', 'natural_sit', 'parcel_key', 'shared_title', 'sale_scope_resolved', 'sale_parcels')
 MAX_NOTE = 300
 
 

@@ -44,6 +44,31 @@ def decode_claim(row) -> dict:
     return {**dict(row), 'value': json.loads(row['value'])}
 
 
+PARCEL_BOUND = ('tkgm.lookup', 'sit.says', 'tkgm.corridor', 'tkgm.neighbors')
+
+
+def with_parcels(con, rows, listing_ref, mode):
+    """Marks each claim drawn from a parcel-bound record with the parcel it is about (`parcel`): the looked-up parcel for a TKGM record;
+    for a sit overlay, corridor or neighbour check the parcel it names, else the main parcel looked up last before it. A record about
+    another parcel (a wrong number in the listing, corrected by the user) then cannot speak for this sale (facts.assemble)."""
+    marks = ','.join('?' * len(PARCEL_BOUND))
+    obs = {r['id']: (r['tool'], r['captured_at'], json.loads(r['payload'])) for r in con.execute(
+        f'SELECT id, tool, captured_at, payload FROM observations WHERE listing_ref=? AND mode=? AND tool IN ({marks})', (listing_ref, mode, *PARCEL_BOUND))}
+    mains = sorted((at, p.get('parcel_key')) for tool, at, p in obs.values() if tool == 'tkgm.lookup' and p.get('found') and not p.get('part'))
+    for c in rows:
+        found = obs.get(c.get('observation_id'))
+        if not found:
+            continue
+        tool, at, payload = found
+        named = payload.get('parcel_key') if isinstance(payload, dict) else None
+        if tool == 'tkgm.lookup' or named:
+            c['parcel'] = named
+        else:
+            before = [parcel for t, parcel in mains if t <= at]
+            c['parcel'] = before[-1] if before else None
+    return rows
+
+
 class FactService:
     # ---- claims ---------------------------------------------------------------------------
     @staticmethod
@@ -165,18 +190,21 @@ class FactService:
     # ---- assembly and assessment ----------------------------------------------------------
     @staticmethod
     def claims(con, listing_ref, mode, status='accepted') -> list[dict]:
-        return [decode_claim(r) for r in con.execute(
+        rows = [decode_claim(r) for r in con.execute(
             'SELECT * FROM claims WHERE listing_ref=? AND mode=? AND status=? ORDER BY seq', (listing_ref, mode, status))]
+        return with_parcels(con, rows, listing_ref, mode)
 
     @staticmethod
     def screening(assembled) -> ScreeningFacts:
         v = assembled.values
         data = {name: float(v[name]) for name in ('price_tl', 'sale_area_m2') if name in v}
         data.update({name: v[name] for name in ('sale_scope_resolved', 'shared_title', 'archaeological_sit',
-                                                'natural_sit', 'access', 'destination_verified') if name in v})
+                                                'natural_sit', 'access', 'destination_verified', 'user_excluded') if name in v})
         if 'route_minutes' in v:
             data['route_minutes'] = [float(x) for x in v['route_minutes']]
         refs = {name: ['claim:' + c['id'] for c in rows] for name, rows in assembled.chosen.items() if name != 'parcel_key'}
+        if 'sale_area_m2' in assembled.values and 'sale_area_m2' not in assembled.chosen:          # a sum of parcel areas cites its parts
+            refs['sale_area_m2'] = ['claim:' + c['id'] for c in assembled.chosen.get('parcel_area_m2', [])]
         return ScreeningFacts(**data, conflicts=list(assembled.conflicts), evidence_refs=refs)
 
     def assess(self, con, listing_ref, mode, now, policy: Policy | None = None) -> dict:
@@ -240,6 +268,8 @@ class FactService:
             decision = Decision(state='excluded', policy_version=policy.version, reasons=['legacy_excluded'] + (decision.reasons if decision and decision.state == 'excluded' else []),
                                 conditions=[], penalties={})
         seen = self.seen(con, listing_ref, mode)
+        if len(assembled.parcels) > 1:
+            seen['corridor_enclosed'] = False   # the main parcel may reach the road through another deed of the same sale: not conclusive
         review = self.review_items(con, listing_ref, mode)
         persisted = con.execute('SELECT id,state,created_at,policy_version FROM assessments WHERE listing_ref=? AND mode=? ORDER BY seq DESC LIMIT 1',
                                 (listing_ref, mode)).fetchone()
@@ -258,9 +288,13 @@ class FactService:
             'official_parcel': None if official is None else (
                 {'found': True, 'type': official.get('property_type'), 'area_m2': official.get('official_area_m2'),
                  'neighborhood': official.get('neighborhood'), 'status': official.get('raw_status')} if official.get('found') else {'found': False}),
-            'listing_id': listing_ref, 'mode': mode,
+            'listing_id': listing_ref, 'mode': mode, 'parcels': assembled.parcels,
             'decision': decision.model_dump() if decision else None,
-            'facts': {f: (brief(rows[0]) if len(rows) == 1 else [brief(r) for r in rows]) for f, rows in assembled.chosen.items()},
+            'facts': {f: (brief(rows[0]) if len(rows) == 1 else [brief(r) for r in rows]) for f, rows in assembled.chosen.items()}
+                     | ({'sale_area_m2': {'claim_id': None, 'value': assembled.values['sale_area_m2'], 'grade': 'resmi', 'proposer': 'code:parcel_sum',
+                                          'source_kind': 'official', 'source_ref': ' + '.join(assembled.parcels), 'quote': None,
+                                          'parts': [brief(r) for r in assembled.chosen['sale_area_m2']]}}
+                        if len(assembled.chosen.get('sale_area_m2') or []) > 1 else {}),     # a several-deed sale: one total, its parts beside it
             'leads': {f: [brief(c) for c in cs[:5]] for f, cs in assembled.leads.items()},
             'conflicts': assembled.conflicts,
             'contradictions': assembled.contradictions[:10],

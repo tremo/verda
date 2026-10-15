@@ -284,6 +284,7 @@ def rank_all(store, *, mode='local'):
         sit_known = 'natural_sit' in facts and 'archaeological_sit' in facts
         # An area in dispute (the official parcel is not what the listing sells) gives a price per m2 that means nothing: no fair-price gap.
         model = None if 'sale_scope' in (current.get('conflicts') or []) else predict
-        out.append({**row, 'new': listing_view(row, model, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, enclosed.get(row['listing_id'], False))})
+        shut = enclosed.get(row['listing_id'], False) and (current.get('seen') or {}).get('corridor_enclosed', True)    # False for a several-deed sale
+        out.append({**row, 'new': listing_view(row, model, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut)})
     out.sort(key=lambda r: -r['new']['score'])
     return {'ranked': out, 'scatter': scatter}

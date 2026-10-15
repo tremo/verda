@@ -7,6 +7,8 @@ listing to its next step on the following sweep.
 import json
 import time
 
+from verda.agency import says
+
 from verda.agency.tuning import number
 
 OPERATOR = {'sahibinden.read_listing': 'sahibinden', 'sahibinden.read_thread': 'sahibinden', 'sahibinden.send_message': 'sahibinden',
@@ -141,6 +143,13 @@ def _sends_stopped(con, listing, now):
         AND json_extract(result,'$.output.status')='not_sent' AND finished_at>?""", (listing, now - DAY)).fetchone()[0]
 
 
+def says_parcels(current):
+    facts = current.get('facts') or {}
+    main = (facts.get('parcel_key') or {}).get('value') if isinstance(facts.get('parcel_key'), dict) else None
+    listed = (facts.get('sale_parcels') or {}).get('value') if isinstance(facts.get('sale_parcels'), dict) else None
+    return ([main] if main else []) + [p for p in (listed or []) if p != main]
+
+
 def work_queue(store, args, *, mode, status=None, now=None):
     from verda.agency.research import fact_status
     status = status or (lambda listing: fact_status(store, listing, mode=mode))
@@ -175,8 +184,9 @@ def work_queue(store, args, *, mode, status=None, now=None):
             if not stuck_here:
                 groups.setdefault('tkgm.neighbors', []).append({'listing_id': listing, 'why': 'neighbour_types_unchecked'})
         # The official sit layer is asked before any message: a parcel the map puts in a first-degree sit is eliminated, not written to.
-        says_due = seen_here.get('tkgm_looked_up') and not seen_here.get('says_checked') and 'says' not in halted \
-            and (current.get('decision') or {}).get('state') in ('research_required', 'conditional', 'eligible')
+        says_due = seen_here.get('tkgm_looked_up') and 'says' not in halted \
+            and (current.get('decision') or {}).get('state') in ('research_required', 'conditional', 'eligible') \
+            and says.stale(store, listing, mode, says_parcels(current))      # never checked, or the sale's parcels changed since
         says_stuck = False
         if says_due:
             with store.transaction() as con:
@@ -201,7 +211,9 @@ def work_queue(store, args, *, mode, status=None, now=None):
                     skip('no_listing_url', listing)
                     continue
             if action == 'tkgm.lookup':
-                parcel = ((current.get('facts') or {}).get('parcel_key') or {}).get('value')
+                parcel = current['next_action'].get('parcel') or ((current.get('facts') or {}).get('parcel_key') or {}).get('value')
+                if current['next_action'].get('part'):
+                    item['part'] = True                 # one more deed of the same sale: its own area only
                 hood = neighborhood_of(store, listing)
                 if parcel and not hood:
                     # The page named no place (or was read by an older reader): read it again, at most twice a day.

@@ -18,7 +18,7 @@ PARCEL = re.compile(r'^(?:0|[1-9]\d{0,5})/[1-9]\d{0,5}$')     # ada/parsel; ada 
 
 @dataclass(frozen=True)
 class FieldSpec:
-    kind: str                       # number | bool | enum | parcel
+    kind: str                       # number | bool | enum | parcel | parcels
     tools: frozenset                # tools that may source the field (users may always)
     values: tuple = ()
     multi: bool = False             # several simultaneous values (route engines)
@@ -36,7 +36,15 @@ FIELDS: dict[str, FieldSpec] = {
     'access': FieldSpec('enum', frozenset({'tkgm.lookup', 'tkgm.corridor', 'tkgm.neighbors'}) | TEXT_TOOLS, ACCESS),
     'route_minutes': FieldSpec('number', frozenset({'geo.route'}), multi=True),
     'destination_verified': FieldSpec('bool', frozenset()),
+    # A sale of several title deeds: every parcel of it, the main one included ("2 adet tapu", "121/9 ve 121/6").
+    'sale_parcels': FieldSpec('parcels', TEXT_TOOLS),
+    # The official area of one parcel of the sale, keyed by the parcel: the sale area is their sum.
+    'parcel_area_m2': FieldSpec('number', frozenset({'tkgm.lookup'}), multi=True),
+    # The user's own decisions, nothing else can source them: drop the listing; ask the seller what exactly is for sale.
+    'user_excluded': FieldSpec('bool', frozenset()),
+    'scope_question': FieldSpec('bool', frozenset()),
 }
+MAX_SALE_PARCELS = 8
 
 # Grade follows the source of the observation, never the proposer.
 TOOL_GRADE = {SEARCH: 'rapor', LISTING: 'beyan', THREAD: 'beyan',
@@ -98,4 +106,8 @@ def validate_value(spec: FieldSpec, value) -> str | None:
         return None if isinstance(value, str) and 2 <= len(value.strip()) <= 80 else 'value_not_short_text'
     if spec.kind == 'parcel':
         return None if isinstance(value, str) and PARCEL.match(value) else 'parcel_key_malformed'
+    if spec.kind == 'parcels':
+        ok = isinstance(value, list) and 2 <= len(value) <= MAX_SALE_PARCELS and len(set(value)) == len(value) \
+            and all(isinstance(v, str) and PARCEL.match(v) for v in value)
+        return None if ok else 'sale_parcels_malformed'
     return 'unknown_kind'

@@ -17,13 +17,15 @@ from verda.legacy import digest
 TZ = ZoneInfo('Europe/Istanbul')
 WINDOW_START, WINDOW_END = (8, 30), (21, 0)            # 08:30 included, 21:00 excluded
 TEMPLATE = 'v1'
-ASK_ORDER = ('parcel_key', 'access', 'natural_sit', 'archaeological_sit')
+ASK_ORDER = ('parcel_key', 'access', 'natural_sit', 'archaeological_sit', 'sale_scope')
 QUESTIONS = {'parcel_key': 'ada/parsel bilgisini paylaşabilir misiniz?',
              'access': 'Parselin doğrudan kadastral yol cephesi var mı?',
              'natural_sit': 'Parsel herhangi bir doğal sit statüsünde mi?',
-             'archaeological_sit': 'Parsel herhangi bir arkeolojik sit alanında mı?'}
+             'archaeological_sit': 'Parsel herhangi bir arkeolojik sit alanında mı?',
+             # only when the user chose to ask (the official parcel is far off the advertised area); the numbers come from the records
+             'sale_scope': 'İlanda {stated} m² yazıyor, tapu kaydında parsel {official} m² görünüyor; satılan parselin tamamı mı, bir kısmı mı, yoksa hisse mi?'}
 QUESTION_ENCLOSED = 'Parselin kadastral yol cephesi görünmüyor; yola geçiş hakkınız (irtifak, mahkeme yolu vb.) var mı?'      # for a parcel the official geometry shows enclosed by numbered neighbours
-FIELD_NAME = {'parcel_key': 'ada/parsel', 'access': 'kadastral yol', 'natural_sit': 'doğal sit', 'archaeological_sit': 'arkeolojik sit'}
+FIELD_NAME = {'parcel_key': 'ada/parsel', 'access': 'kadastral yol', 'natural_sit': 'doğal sit', 'archaeological_sit': 'arkeolojik sit', 'sale_scope': 'satış kapsamı'}
 MODES = ('off', 'dry_run', 'live')
 CANDIDATE_STATES = ('research_required', 'conditional', 'eligible')
 ACTIVE = ('prepared', 'sending', 'dry_run', 'confirmed', 'delivery_unknown')
@@ -60,13 +62,20 @@ def within_window(now):
 
 
 # ---- text -----------------------------------------------------------------------------------------------------------
-def render(listing_id, fields, enclosed=False):
-    """The one message for these fields, in a fixed order. Raises ValueError for fields that cannot be asked."""
+def area_text(value):
+    whole = f'{float(value):,.0f}'.replace(',', '.')
+    return whole
+
+
+def render(listing_id, fields, enclosed=False, scope=None):
+    """The one message for these fields, in a fixed order. Raises ValueError for fields that cannot be asked.
+    `scope`: (advertised m2, official m2) for the sale-scope question."""
     wanted = [f for f in ASK_ORDER if f in set(fields)]
-    if not wanted or set(fields) - set(ASK_ORDER):
+    if not wanted or set(fields) - set(ASK_ORDER) or ('sale_scope' in wanted and not scope):
         raise ValueError('Nothing askable')
-    sentences = [QUESTION_ENCLOSED if (f == 'access' and enclosed) else QUESTIONS[f] for f in wanted]
-    sentences[0] = sentences[0][0].lower() + sentences[0][1:]            # follows "için"
+    sentences = [QUESTION_ENCLOSED if (f == 'access' and enclosed) else
+                 QUESTIONS[f].format(stated=area_text(scope[0]), official=area_text(scope[1])) if f == 'sale_scope' else QUESTIONS[f] for f in wanted]
+    sentences[0] = tr_lower(sentences[0][0]) + sentences[0][1:]           # follows "için" (Turkish: İ is i, not i with a dot)
     return f"Merhaba, {listing_id} numaralı taşınmaz için " + ' '.join(sentences) + ' Teşekkürler.'
 
 
@@ -325,7 +334,12 @@ def plan(*, listing_id, current, built, convo, outbox, mode, now, sent_this_run=
     fields = askable_fields(current, built)
     if not fields:
         return {**no('nothing_to_ask'), 'replied': [f for f in ASK_ORDER if (built['fields'].get(f) or {}).get('state') == 'replied']}
-    text = render(listing_id, fields, enclosed=bool((current.get('seen') or {}).get('corridor_enclosed')))
+    scope = next(((e['other']['value'], e['chosen']['value']) for e in current.get('listing_errors') or [] if e.get('field') == 'sale_area_m2'), None)
+    if 'sale_scope' in fields and not scope:
+        fields = [f for f in fields if f != 'sale_scope']           # the numbers are part of the question: without them it is not asked
+        if not fields:
+            return {**no('nothing_to_ask'), 'replied': []}
+    text = render(listing_id, fields, enclosed=bool((current.get('seen') or {}).get('corridor_enclosed')), scope=scope)
     try:
         check_text(text, listing_id)
     except ValueError:

@@ -11,19 +11,19 @@ from datetime import datetime
 from verda.facts.text import fold
 
 CRITERIA = ('parcel_key', 'shared_title', 'archaeological_sit', 'natural_sit', 'access')
-ASKABLE = ('parcel_key', 'archaeological_sit', 'natural_sit', 'access')    # a seller can answer these in a message
+ASKABLE = ('parcel_key', 'archaeological_sit', 'natural_sit', 'access', 'sale_scope')    # a seller can answer these in a message
 OPEN_TASK_STATES = ('queued', 'running', 'waiting_browser', 'waiting_children', 'waiting_user', 'blocked', 'uncertain')
 TASK_STATE = {'queued': 'sırada', 'running': 'çalışıyor', 'waiting_browser': 'tarayıcıda çalışıyor', 'waiting_children': 'alt görevleri bekliyor',
               'waiting_user': 'senden bir şey bekliyor', 'blocked': 'durdu', 'uncertain': 'sonucu belirsiz'}
 CHECKS = {'sahibinden.read_listing': 'İlan sayfası okundu', 'sahibinden.read_thread': 'Satıcı konuşması kontrol edildi',
           'tkgm.lookup': 'Resmî parsel (TKGM) sorgulandı', 'tkgm.corridor': 'Yol koridoru incelendi', 'geo.route': 'Mertur rotası hesaplandı'}
 RESOURCE_LABEL = {'tkgm': 'TKGM erişimi', 'sahibinden': 'Sahibinden erişimi', 'sahibinden_login': 'Sahibinden girişi', 'geography': 'Rota servisi'}
-PLAN_FIELDS = {'ask:sit': ('archaeological_sit', 'natural_sit'), 'ask:access': ('access',), 'ask:parcel_identity': ('parcel_key',),
+PLAN_FIELDS = {'ask:sit': ('archaeological_sit', 'natural_sit'), 'ask:access': ('access',), 'ask:parcel_identity': ('parcel_key',), 'ask:sale_scope': ('sale_scope',),
                'sahibinden.read_thread': ASKABLE, 'sahibinden.read_listing': ('parcel_key', 'shared_title') + ASKABLE,
                'tkgm.lookup': ('parcel_key',), 'geo.route': ('route_minutes',)}
 PLAN_LABEL = {'sahibinden.read_thread': 'Satıcı konuşması okunacak', 'sahibinden.read_listing': 'İlan sayfası okunacak',
               'tkgm.lookup': 'Resmî parsel sorgusu sırada', 'geo.route': 'Rota hesabı sırada'}
-FIELD_TR = {'parcel_key': 'ada/parsel', 'archaeological_sit': 'arkeolojik sit', 'natural_sit': 'doğal sit', 'access': 'kadastral yol', 'shared_title': 'hisse'}
+FIELD_TR = {'parcel_key': 'ada/parsel', 'archaeological_sit': 'arkeolojik sit', 'natural_sit': 'doğal sit', 'access': 'kadastral yol', 'shared_title': 'hisse', 'sale_scope': 'satış kapsamı'}
 SENDING = {'off': 'Mesaj gönderme kapalı (Ayarlar); açılınca sorulacak.', 'dry_run': 'Şu an deneme modunda: mesaj yazılır ve doğrulanır ama gitmez.', 'live': 'Sıradaki gönderim çalışmasında tek mesaj olarak sorulacak.'}
 
 
@@ -77,6 +77,8 @@ def covers(text):
         out.add('access')
     if re.search(r'\bparsel|\bada\b', f):
         out.add('parcel_key')
+    if re.search(r'\bhisse|\btapu|m²|\bm2\b|metrekare|\bdönüm', f):
+        out.add('sale_scope')                 # what exactly is for sale: shares, deeds, the area
     return out
 
 
@@ -233,7 +235,8 @@ def build(data, unknown, next_action=None, context=None):
 def unknown_fields(status):
     """The criteria a listing still has no value for, from its fact status."""
     known = status.get('facts') or {}
-    return [f for f in CRITERIA if f not in known] + ([] if known.get('route_minutes') else ['route_minutes'])
+    scope = ['sale_scope'] if 'sale_scope' in (status.get('conflicts') or []) else []     # the official parcel is not (all of) what is for sale
+    return [f for f in CRITERIA if f not in known] + ([] if known.get('route_minutes') else ['route_minutes']) + scope
 
 
 def context_of(status):

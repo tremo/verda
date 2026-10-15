@@ -91,6 +91,20 @@ def opp_view(new):
             'fairUnitPrice': new['fair_unit_price'], 'road': new['road'], 'caps': new['caps'], 'parts': new['parts']}
 
 
+def sale_parcels_view(store, listing_id, current, mode='local'):
+    """A sale of several deeds: each parcel with its official area and TKGM link (None for a single parcel)."""
+    parcels = current.get('parcels') or []
+    if len(parcels) < 2:
+        return None
+    looked = {}
+    with store.transaction() as con:
+        for r in con.execute("SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at", (mode, listing_id)):
+            p = json.loads(r['payload'])
+            if p.get('found'):
+                looked[p.get('parcel_key')] = p
+    return [{'parcel': p, 'areaM2': (looked.get(p) or {}).get('official_area_m2'), 'url': (looked.get(p) or {}).get('parcel_url')} for p in parcels]
+
+
 def area_conflict(current):
     """The advertised and the official area when they are too far apart to be the same sale (facts.assemble's `sale_scope` conflict):
     the dashboard then shows the advertised area, names the official one and says why the listing waits for the user."""
@@ -127,6 +141,7 @@ def listing_document(store, row, now_iso, *, mode='local', new=None):
         'proposals': proposals_of(store, row['listing_id'], mode),
         'opp': opp_view(new) if new else None,
         'areaConflict': area_conflict(current),
+        'parcels': sale_parcels_view(store, row['listing_id'], current, mode),
         'photos': photo_ids(store, row['listing_id'], mode),
         **(parcel_shape(store, row['listing_id'], mode) or {}),
         'updatedAt': now_iso,

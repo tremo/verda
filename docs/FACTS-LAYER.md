@@ -106,6 +106,13 @@ Güçlüden zayıfa: `kullanici` · `resmi` · `bagimsiz` · `beyan` · `rapor`.
 - **Satıcı cevapları** (`replies.pending`): her zaman konuşmayı **bulan** son okumaya bakar (sonraki "bulunamadı" cevabı gizlemez); ada/parsel de yorumlanır; A1–A3 arkeolojik, D1–D3 doğal sit dereceleridir. Yönetici net bulmadığı cevabı `listing.flag` ile işaretler, sessizce atlamaz; işaretli alan yeniden yoruma verilmez.
 - **Gözlem kimliği**: araç çıktısı model bağlamına `observation_id` ile girer (`store._finish_tool`); okuduğunu öneren ajan kaynak kimliğini bilir.
 
+## Birden çok tapu, kullanıcı kararları (15 Ekim)
+
+- **`sale_parcels`**: satış birden çok parselse hepsi (ana parsel önce). Kaynak: kullanıcı ya da ilan/satıcı beyanı (alıntıyla). Her ek parsel `tkgm.lookup {part: true}` ile sorgulanır ve yalnız kendi alanını (`parcel_area_m2`, parsele göre) yazar; satış alanı parsellerin resmî alanları toplamıdır. Bir parsel sorgulanmadan alan açık kalır, eleme yapılmaz; sıradaki adım o parselin sorgusudur.
+- **Parsele bağlı kayıtlar** (`service.with_parcels`): TKGM, resmî sit, koridor ve komşu kayıtları hangi parsel içinse o parsele bağlanır; satışın parselleri dışındaki parsele ait kayıt ilanı etkilemez. Kullanıcı yanlış parsel numarasını düzeltince (1336424878: 894/3 bir yol parseliydi) eski parselin alanı ve sit sonucu kendiliğinden devre dışı kalır, yeni parsel sorgulanır.
+- **Resmî sit** satışın bütün parsellerine bakar, en kısıtlayıcı sonuç geçerlidir; parseller değişince yeniden çalışır (`says.stale`). **Yol koridoru** ana parselde çalışır; çok parselli satışta "kenarlar komşu parsel" sonucu kesin sayılmaz (yol kardeş parselden olabilir).
+- **`user_excluded`** (kullanıcının "ele" kararı, panodaki "İlgilenmiyorum" dahil): kesin eleme, ilan için başka iş yapılmaz. **`scope_question`**: alan uyuşmazlığında kullanıcı "satıcıya sor" derse sabit şablonla "ilanda X m², tapu kaydında Y m²; tamamı mı, bir kısmı mı, hisse mi?" sorulur; cevap hisse ise `shared_title`, başka parseller ise `sale_parcels` önerilir, belirsizse işaretlenir.
+
 ## Henüz yok
 
 - LLM'in öneri aracı (`facts.propose`): doğrulayıcı hazır ve testli, araç ve yönerge bağlantısı sıradaki dilim.

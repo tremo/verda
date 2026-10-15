@@ -30,10 +30,14 @@ def decisions(doc):
                 out.append((field, values[fact['value']], f"{key}={fact['value']}@{at}", basis))
         elif key == 'parcelId' and str(fact.get('ada', '')).isdigit() and str(fact.get('parsel', '')).isdigit():
             out.append(('parcel_key', f"{int(fact['ada'])}/{int(fact['parsel'])}", f"parcelId={fact['ada']}/{fact['parsel']}@{at}", basis))
+    # "İlgilenmiyorum" on the dashboard is the user's own elimination: Verda stops working on the listing (and starts again when it is taken back).
+    decision = doc.get('decision')
+    if decision in ('excluded', 'shortlist', 'maybe') and doc.get('updatedAt'):              # a note alone decides nothing
+        out.append(('user_excluded', decision == 'excluded', f"decision={decision}@{doc['updatedAt']}", 'dashboard'))
     return out
 
 
-BASIS = {'site': 'yerinde gördüm', 'seller': 'satıcı ya da emlakçı söyledi', 'official': 'resmî belgede gördüm', 'map': 'haritadan baktım'}
+BASIS = {'site': 'yerinde gördüm', 'seller': 'satıcı ya da emlakçı söyledi', 'official': 'resmî belgede gördüm', 'map': 'haritadan baktım', 'dashboard': 'panoda kararını verdin'}
 
 
 def import_feedback(store, firestore, *, now=None, mode='local'):

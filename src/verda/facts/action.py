@@ -24,13 +24,20 @@ def next_action(decision: Decision | None, assembled, seen: dict, review_open: i
     if decision is not None and decision.state in ('excluded', 'outside_search'):
         return _act('none', decision.state, reasons=decision.reasons)
     if assembled is not None and assembled.conflicts:
+        if assembled.conflicts == ['sale_scope'] and assembled.values.get('scope_question') is True:
+            # The user chose to ask the seller what exactly is for sale instead of deciding it.
+            return _act('ask:sale_scope' if seen.get('thread_read') else 'sahibinden.read_thread', 'sale_scope_question')
         return _act('human_review', 'conflict', fields=assembled.conflicts)
     if review_open:
         return _act('human_review', 'needs_review', count=review_open)
     if not seen.get('listing_read'):
         return _act('sahibinden.read_listing', 'listing_detail_not_read')
-    if assembled is not None and 'parcel_key' not in assembled.values:
+    if assembled is not None and 'parcel_key' not in assembled.values and not assembled.parcels:
         return _act('ask:parcel_identity', 'parcel_identity_missing')
+    if assembled is not None and assembled.unchecked_parcels and seen.get('tkgm_looked_up'):
+        # A parcel of the sale with no official record yet: a further deed, or a number the user corrected.
+        first = assembled.unchecked_parcels[0]
+        return _act('tkgm.lookup', 'sale_parcel_unchecked', parcel=first, part=first != assembled.parcels[0])
     missing = [r for r in (decision.reasons if decision else []) if decision.state == 'research_required']
     steps = []
     if 'sale_area' in missing:

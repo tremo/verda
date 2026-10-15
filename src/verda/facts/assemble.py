@@ -21,6 +21,8 @@ class Assembled:
     leads: dict = field(default_factory=dict)           # field -> claims too weak to establish it
     contradictions: list = field(default_factory=list)  # the user's decision against official evidence: both stay visible
     errors: list = field(default_factory=list)          # what a listing or seller stated that the official record corrects
+    parcels: list = field(default_factory=list)         # the parcels this sale is (the main one first); empty while unknown
+    unchecked_parcels: list = field(default_factory=list)   # parcels of the sale with no official record yet: to look up
 
     def basis(self) -> dict:
         return {f: min((c['grade'] for c in cs), key=GRADES.index) for f, cs in self.chosen.items()}
@@ -84,6 +86,7 @@ def assemble(claims: list[dict], policy: Policy | None = None) -> Assembled:
             'source_kind': 'user', 'key': None, 'scope': 'listing', 'observation_id': None, 'proposer': 'policy',
             'source_ref': 'policy.destination', 'quote': f"{dest['name']} {dest['lat']},{dest['lon']} (kullanıcı verdi {dest.get('given_at', '')})"})
     out = Assembled()
+    _scope_to_sale(by_field, policy, out)
     # Identity first: a disputed parcel withholds everything bound to the parcel,
     # but not what the listing itself says (price, its own statements).
     withhold = False
@@ -106,8 +109,58 @@ def assemble(claims: list[dict], policy: Policy | None = None) -> Assembled:
                 out.errors.append(entry)            # the official record is right; the statement was wrong
             else:
                 out.contradictions.append({**entry, 'reopen': winner['grade'] == 'kullanici' and other['grade'] in ('resmi', 'bagimsiz')})
+    _sum_parcels(out)
     _check_scope(out)
     return out
+
+
+def _scope_to_sale(by_field, policy, out):
+    """Which parcels this sale is, before anything else is picked: the user's parcel or parcel list first, then a stated list, else the
+    chosen parcel. Records about any other parcel are set aside: 1336424878 named a road parcel (894/3, 222 m2); once the user gave the
+    real one, the road parcel's area, sit check and corridor must not decide the listing."""
+    def pick(name):
+        value, rows, conflict, _, _ = _pick(name, by_field.get(name, []), policy.field_grades.get(name, ()), False)
+        return (value, rows[0]['grade']) if rows and not conflict else (None, None)
+    main, main_grade = pick('parcel_key')
+    listed, listed_grade = pick('sale_parcels')
+    if listed and main_grade == 'kullanici' and listed_grade != 'kullanici' and main not in listed:
+        listed = None                                   # the user's own parcel outranks a stated list that does not contain it
+    parcels = ([main] if main and (not listed or main in listed) else []) + [p for p in (listed or []) if p != main]
+    if listed and not main:
+        parcels = list(listed)
+    out.parcels = parcels
+    if not parcels:
+        return
+    for name, claims in by_field.items():
+        by_field[name] = [c for c in claims if c.get('parcel') is None or c.get('parcel') in parcels]
+
+
+def _sum_parcels(out):
+    """The sale area of a several-deed sale is the sum of its parcels' official areas; a parcel not looked up yet leaves it open.
+    For a single parcel, a parcel with no official record yet (a corrected number) is named so it is looked up."""
+    areas = {c.get('key'): c for c in out.chosen.get('parcel_area_m2', []) if c.get('key')}
+    official = (out.chosen.get('sale_area_m2') or [{}])[0]
+    if official.get('grade') == 'resmi' and official.get('parcel') and official['parcel'] not in areas:
+        areas[official['parcel']] = official
+    out.unchecked_parcels = [p for p in out.parcels if p not in areas]
+    if len(out.parcels) < 2:
+        return
+    stated = [e['other']['value'] for e in out.errors if e['field'] == 'sale_area_m2']
+    stated += [c['value'] for c in out.contradictions if c['field'] == 'sale_area_m2']
+    out.errors = [e for e in out.errors if e['field'] != 'sale_area_m2']
+    out.contradictions = [c for c in out.contradictions if c['field'] != 'sale_area_m2']
+    if out.unchecked_parcels:
+        for name in ('sale_area_m2', 'sale_scope_resolved'):       # one deed's area is not the sale's: wait for the others
+            out.values.pop(name, None)
+            out.chosen.pop(name, None)
+        return
+    rows = [areas[p] for p in out.parcels]
+    total = round(sum(float(r['value']) for r in rows), 2)
+    out.values['sale_area_m2'], out.chosen['sale_area_m2'] = total, rows
+    for value in stated:
+        if not _same(value, total, 'sale_area_m2'):
+            out.errors.append({'field': 'sale_area_m2', 'chosen': {'claim_id': rows[0]['id'], 'grade': 'resmi', 'value': total},
+                               'other': {'claim_id': None, 'grade': 'beyan', 'value': value, 'quote': None}})
 
 
 def _check_scope(out: Assembled) -> None:

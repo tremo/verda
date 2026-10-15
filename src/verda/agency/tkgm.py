@@ -150,6 +150,7 @@ class TkgmClient:
         ident = self._neighborhood_id(neighborhood)
         url = f'{BASE}/parsel/{ident}/{ada}/{parcel}'
         base = {'parcel_key': f'{ada}/{parcel}', 'neighborhood': neighborhood, 'neighborhood_id': ident, 'source_url': url,
+                **({'part': True} if args.get('part') else {}),         # one more parcel of a several-deed sale, not the listing's main parcel
                 'parcel_url': f'https://parselsorgu.tkgm.gov.tr/#ara/idari/{ident}/{ada}/{parcel}', 'observed_at': time.time()}
         try:
             payload = self._get(url)

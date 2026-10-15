@@ -88,7 +88,12 @@ def extract(tool: str, observation_id: str, mode: str, payload: Any, listing_ref
         if payload.get('found') is not True or not listing_ref or not _number(payload.get('official_area_m2')):
             return []
         common = dict(listing_ref=listing_ref, proposer='code:tkgm_record@1', mode=mode, observation_id=observation_id)
-        out = [Proposal(field='sale_area_m2', value=payload['official_area_m2'], source_ref='official_area_m2', **common)]
+        key = payload.get('parcel_key') if isinstance(payload.get('parcel_key'), str) and PARCEL.match(payload['parcel_key']) else None
+        # Every looked-up parcel's own area, keyed by the parcel: a several-deed sale adds them up (facts.assemble).
+        per_parcel = [Proposal(field='parcel_area_m2', value=payload['official_area_m2'], source_ref='official_area_m2', key=key, **common)] if key else []
+        if payload.get('part'):
+            return per_parcel                  # another parcel of the same sale: it does not name the listing's parcel, type or whole area
+        out = per_parcel + [Proposal(field='sale_area_m2', value=payload['official_area_m2'], source_ref='official_area_m2', **common)]
         if isinstance(payload.get('property_type'), str) and payload['property_type'].strip():
             out.append(Proposal(field='property_type', value=payload['property_type'].strip(), source_ref='property_type', **common))
         if isinstance(payload.get('parcel_key'), str) and PARCEL.match(payload['parcel_key']):

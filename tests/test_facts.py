@@ -1083,3 +1083,76 @@ def test_the_agent_sees_the_observation_id_next_to_a_tool_output_so_it_can_recor
     finished = [e['data'] for e in store.context(task)['history'] if e['kind'] == 'tool_finished']
     recorded = table(store, "SELECT id FROM observations WHERE tool='sahibinden.read_listing'")[0]['id']
     assert finished and finished[-1]['observation_id'] == recorded
+
+
+def bound(field, value, grade, *, seq, parcel=None, kind='official', key=None):
+    return {**claim(field, value, grade, seq=seq, kind=kind, key=key), 'parcel': parcel}
+
+
+def test_a_two_deed_sale_waits_for_its_second_parcel_and_then_counts_both_areas():
+    # 1252932673: "2 adet tapu: 2582 + 678 m2"; the user found the second deed, 402/7, next to 402/5 on the TKGM map
+    from verda.facts.action import next_action
+    from verda.facts.service import FactService
+    from verda.policy import evaluate
+    base = [claim('price_tl', 12e6, 'beyan', seq=1), claim('sale_area_m2', 3260.0, 'beyan', seq=2), claim('parcel_key', '402/5', 'beyan', seq=3),
+            bound('parcel_key', '402/5', 'resmi', seq=4, parcel='402/5'), bound('sale_area_m2', 678.02, 'resmi', seq=5, parcel='402/5'),
+            bound('parcel_area_m2', 678.02, 'resmi', seq=6, parcel='402/5', key='402/5'), bound('sale_scope_resolved', True, 'resmi', seq=7, parcel='402/5'),
+            claim('sale_parcels', ['402/5', '402/7'], 'kullanici', seq=8, kind='user')]
+    waiting = assemble(base)
+    assert waiting.parcels == ['402/5', '402/7'] and waiting.unchecked_parcels == ['402/7'] and not waiting.conflicts
+    assert 'sale_area_m2' not in waiting.values                                  # one deed's area is not the sale's
+    decision = evaluate(FactService.screening(waiting))
+    assert decision.state == 'research_required' and 'area_below_minimum' not in decision.reasons
+    step = next_action(decision, waiting, {'listing_read': True, 'tkgm_looked_up': True}, 0, None)
+    assert step['action'] == 'tkgm.lookup' and step['parcel'] == '402/7' and step['part'] is True
+    done = assemble(base + [bound('parcel_area_m2', 2582.0, 'resmi', seq=9, parcel='402/7', key='402/7')])
+    assert done.values['sale_area_m2'] == 3260.02 and done.values['sale_scope_resolved'] is True and not done.conflicts and not done.unchecked_parcels
+
+
+def test_the_users_parcel_sets_aside_every_record_about_the_wrong_parcel():
+    # 1336424878: the listing named 894/3, a 222 m2 road parcel; the user read the real one, 881/14, off a photo of the deed
+    from verda.facts.action import next_action
+    from verda.facts.service import FactService
+    from verda.policy import evaluate
+    got = assemble([claim('price_tl', 15e6, 'beyan', seq=1), claim('sale_area_m2', 4540.0, 'beyan', seq=2), claim('parcel_key', '894/3', 'beyan', seq=3),
+                    bound('parcel_key', '894/3', 'resmi', seq=4, parcel='894/3'), bound('sale_area_m2', 221.84, 'resmi', seq=5, parcel='894/3'),
+                    bound('property_type', 'Yol', 'resmi', seq=6, parcel='894/3'), bound('sale_scope_resolved', True, 'resmi', seq=7, parcel='894/3'),
+                    bound('natural_sit', 'first_degree', 'resmi', seq=8, parcel='894/3'),
+                    claim('parcel_key', '881/14', 'kullanici', seq=9, kind='user')])
+    assert got.values['parcel_key'] == '881/14' and got.values['sale_area_m2'] == 4540.0 and 'natural_sit' not in got.values
+    assert got.unchecked_parcels == ['881/14'] and not got.conflicts
+    decision = evaluate(FactService.screening(got))
+    assert decision.state == 'research_required'                                 # neither excluded by the road parcel's sit nor its area
+    step = next_action(decision, got, {'listing_read': True, 'tkgm_looked_up': True}, 0, None)
+    assert step == {'action': 'tkgm.lookup', 'why': 'sale_parcel_unchecked', 'parcel': '881/14', 'part': False}
+
+
+def test_the_users_no_eliminates_and_the_users_ask_sends_the_scope_question():
+    from verda.agency import message as M
+    from verda.facts.action import next_action
+    from verda.facts.service import FactService
+    from verda.policy import evaluate
+    out = assemble([claim('price_tl', 5e6, 'beyan', seq=1), claim('user_excluded', True, 'kullanici', seq=2, kind='user')])
+    assert evaluate(FactService.screening(out)).reasons == ['user_excluded']
+    scope = assemble([claim('price_tl', 2.25e6, 'beyan', seq=1), claim('sale_area_m2', 1318.0, 'beyan', seq=2), claim('parcel_key', '115/57', 'beyan', seq=3),
+                      bound('sale_area_m2', 2606.22, 'resmi', seq=4, parcel='115/57'), bound('sale_scope_resolved', True, 'resmi', seq=5, parcel='115/57'),
+                      claim('scope_question', True, 'kullanici', seq=6, kind='user')])
+    decision = evaluate(FactService.screening(scope))
+    assert next_action(decision, scope, {'listing_read': True, 'thread_read': True, 'tkgm_looked_up': True}, 0, None)['action'] == 'ask:sale_scope'
+    assert M.render('1216510607', ['sale_scope'], scope=(1318.0, 2606.22)) == \
+        'Merhaba, 1216510607 numaralı taşınmaz için ilanda 1.318 m² yazıyor, tapu kaydında parsel 2.606 m² görünüyor; satılan parselin tamamı mı, bir kısmı mı, yoksa hisse mi? Teşekkürler.'
+
+
+def test_a_further_deeds_lookup_records_only_its_own_area():
+    from verda.facts.extract import extract
+    payload = {'found': True, 'parcel_key': '402/7', 'official_area_m2': 2582.0, 'property_type': 'Tarla', 'part': True}
+    assert [(p.field, p.key, p.value) for p in extract('tkgm.lookup', 'o1', 'local', payload, '1252932673')] == [('parcel_area_m2', '402/7', 2582.0)]
+    main = extract('tkgm.lookup', 'o2', 'local', {**payload, 'parcel_key': '402/5', 'part': None}, '1252932673')
+    assert {p.field for p in main} == {'parcel_area_m2', 'sale_area_m2', 'property_type', 'parcel_key', 'sale_scope_resolved'}
+
+
+def test_ilgilenmiyorum_on_the_dashboard_is_the_users_elimination():
+    from verda.publish.feedback import decisions
+    assert decisions({'decision': 'excluded', 'updatedAt': 't1'}) == [('user_excluded', True, 'decision=excluded@t1', 'dashboard')]
+    assert decisions({'decision': 'shortlist', 'updatedAt': 't2'}) == [('user_excluded', False, 'decision=shortlist@t2', 'dashboard')]
+    assert decisions({'note': 'sadece not', 'updatedAt': 't3'}) == []

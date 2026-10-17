@@ -490,3 +490,12 @@ def test_the_inbox_card_time_is_read_whether_it_is_a_clock_time_a_weekday_or_a_d
     for last in ('16:14', 'Cumartesi', 'Dün', '10.10.2026', '10.10.2026 09:30'):
         assert parse_row(f'Başlık\n2\nSatıcı Adı\nön izleme metni\n{last}') == {'title': 'Başlık', 'counterpart': 'Satıcı Adı', 'last_at_text': last, 'unread': 2}
     assert parse_row('Başlık\nSatıcı Adı\nMerhaba, saat 14:30 gibi')['last_at_text'] is None            # a sentence that mentions a time is not a time
+
+
+def test_a_very_long_conversation_is_trimmed_to_the_newest_messages_so_its_receipt_fits_the_record_limit():
+    from verda.agency.jev import thread_receipt
+    from verda.legacy import canonical
+    raw = {'url': 'https://banaozel.sahibinden.com/mesajlarim/1000000001/aa/bb', 'messages': [
+        {'role': 'seller' if i % 2 else 'user', 'text': f'{i} ' + 'x' * 1400, 'sent_at_text': f'{i}'} for i in range(60)]}
+    receipt = thread_receipt('1000000001', raw)
+    assert receipt['older_omitted'] and receipt['messages'][-1]['text'].startswith('59 ') and len(canonical(receipt).encode()) < 32768

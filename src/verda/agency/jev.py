@@ -399,8 +399,14 @@ def thread_receipt(listing_id, raw):
         messages.append({'id': base if seen[base] == 1 else f'{base}-{seen[base]}', 'role': item['role'],
                          'text': text[:1500], 'truncated': len(text) > 1500, 'sent_at_text': item.get('sent_at_text')})
     omitted = len(messages) > THREAD_MESSAGES or bool(raw.get('older_omitted'))
+    kept = messages[-THREAD_MESSAGES:]
+    # A record is at most 32 KB (browser.finish): a long conversation (60 messages of 1,500 characters) failed every read and was retried.
+    # The newest messages are what decides anything, so the oldest are dropped until the receipt fits and the omission is marked.
+    while len(kept) > 1 and sum(len(m['text'].encode()) + 200 for m in kept) > 24000:
+        kept.pop(0)
+        omitted = True
     return ThreadReceipt.model_validate({'listing_id': listing_id, 'url': url, 'found': True,
-                                         'older_omitted': omitted, 'messages': messages[-THREAD_MESSAGES:]}).model_dump()
+                                         'older_omitted': omitted, 'messages': kept}).model_dump()
 
 
 def listing_title(store, listing_id):

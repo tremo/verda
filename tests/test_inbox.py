@@ -99,3 +99,28 @@ def test_a_conversation_opened_once_is_never_reported_missing_without_looking(tm
     opened.clear()
     receipt = jev.ThreadReader(browser_factory=factory, sleep=lambda s: None).read(store, {'arguments': {'listing_id': '1000000001'}}, lambda p, d=None: None)
     assert receipt['found'] is False and not opened
+
+
+def test_an_inbox_list_too_big_for_a_record_is_trimmed_not_failed(tmp_path, monkeypatch):
+    # 18 Oct 2026: the list outgrew 32 KB, the whole read failed, the job expired and the source was stopped for seven hours
+    from verda.agency import jev
+    from verda.agency.browser import BrowserBridge
+    from verda.legacy import canonical
+    cards = [f'Arsa {i} ' + 'çok uzun bir ilan başlığı ' * 4 + f'\nAli {i}\n17.10.2026 10:00' for i in range(400)]
+
+    class Inbox:
+        def __init__(self, url): pass
+        def evaluate(self, script):
+            if script == jev.THREAD_READ: return {'url': jev.INBOX_URL, 'inbox_rows': 400}
+            if script == jev.READ_STATE: return {}
+            if script == jev.ROW_TEXTS: return cards
+            return False
+        def close(self): pass
+
+    monkeypatch.setattr('verda.agency.inbox.enough_rows', lambda rows, settled, run=15: False)
+    monkeypatch.setattr('verda.agency.inbox.settled_check', lambda store: (lambda row: False))
+    monkeypatch.setattr(jev.InboxReader, '_unread_texts', lambda self, browser: [])
+    import importlib
+    importlib.import_module('jev_ultrafast.browser')       # the real package: the reader imports it; the fake browser is passed in
+    result = jev.InboxReader(browser_factory=Inbox, sleep=lambda s: None).read(None, {'arguments': {'depth': 'full'}}, lambda p, d=None: None)
+    assert 20 < len(result['rows']) < 400 and result['complete'] is False and len(canonical(result).encode()) < 32768

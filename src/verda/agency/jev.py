@@ -512,8 +512,14 @@ class InboxReader:
                 if row and identity not in seen:
                     seen.add(identity)
                     rows.append(row)
-            result = InboxReceipt.model_validate({'url': INBOX_URL, 'complete': complete and len(rows) <= INBOX_ROWS,
-                                                  'rows': rows[:INBOX_ROWS]}).model_dump()
+            # A record is at most 32 KB (browser.finish). The list is newest first, so when it grows past that the oldest rows are dropped and the
+            # list says it is not complete; before this the whole read failed, the browser job expired and the source was stopped (18 Oct 2026).
+            from verda.legacy import canonical
+            kept = rows[:INBOX_ROWS]
+            while len(kept) > 20 and len(canonical(kept).encode()) > 28000:
+                kept = kept[:int(len(kept) * 0.9)]
+            result = InboxReceipt.model_validate({'url': INBOX_URL, 'complete': complete and len(kept) == len(rows) and len(rows) <= INBOX_ROWS,
+                                                  'rows': kept}).model_dump()
             progress('verified')
             finished = True
             return result

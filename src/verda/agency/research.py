@@ -5,6 +5,7 @@ import sqlite3
 import time
 
 from verda.legacy import decoded, canonical
+from verda.policy import Policy
 
 
 def archive_connection(store):
@@ -171,7 +172,15 @@ def fact_status(store, listing_id, *, mode='local'):
     """Verified facts, the rule engine's decision and the next real action for one listing."""
     lifecycle = legacy_lifecycle(store, listing_id) if mode == 'local' else None
     with store.transaction() as con:
-        return store.facts.status(con, listing_id, mode, legacy_lifecycle=lifecycle)
+        status = store.facts.status(con, listing_id, mode, legacy_lifecycle=lifecycle)
+        if lifecycle == 'excluded' and legacy_exclusion_reason(store, listing_id) == LEGACY_REASONS['price_over_15m']:
+            # A price exclusion is a fact about a day, not a verdict: once the listing's own price is back under the limit, it is a candidate again
+            # (1320977287 stayed "excluded" on its 16 M price of 22 Sep after it fell to 14 M). Every other legacy reason still stands.
+            open_status = store.facts.status(con, listing_id, mode, legacy_lifecycle=None)
+            price = ((open_status.get('facts') or {}).get('price_tl') or {}).get('value')
+            if price is not None and price <= Policy().max_price_tl:
+                return open_status
+        return status
 
 
 def normalise_value(field, value):

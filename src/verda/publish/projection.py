@@ -88,7 +88,7 @@ def parcel_shape(store, listing_id, mode='local'):
 def opp_view(new):
     """The opportunity score's numbers for the dashboard: what it says and why."""
     return {'score': new['score'], 'opportunity': new['opportunity'], 'purpose': new['purpose'], 'proximity': new['proximity'], 'label': new['label'], 'gapPct': new['gap_pct'],
-            'fairUnitPrice': new['fair_unit_price'], 'road': new['road'], 'caps': new['caps'], 'parts': new['parts']}
+            'fairUnitPrice': new['fair_unit_price'], 'road': new['road'], 'caps': new['caps'], 'parts': new['parts'], 'basis': new.get('basis')}
 
 
 def sale_parcels_view(store, listing_id, current, mode='local'):

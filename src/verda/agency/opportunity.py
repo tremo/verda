@@ -1,7 +1,7 @@
 """The opportunity score: "is this a good buy for what this buyer wants", next to the older price-vs-peers score (which stays as it is).
 
-1. Fair price: log(price per m2) ~ land type + size curve + neighbourhood (ridge, so small neighbourhoods lean on the island) fitted on one row per
-   parcel. A listing's gap to its fair price is judged against how much asking prices normally scatter, so a small gap is "fair", not "dear".
+1. Fair price: from comparables (agency/comparables.py): same-neighbourhood parcels with a known road when there are enough, otherwise the neighbourhood's
+   level relative to the others, otherwise none. A listing's gap to its fair price is judged against how much asking prices normally scatter.
 2. Purpose fit: investment 40% / house 20% / production 40% (the buyer's own split), from facts the system knows. A fact it does not know scores
    in the middle and is shown as unknown; it never counts as bad.
 3. Distance to the destination: 15% (was 30%).
@@ -11,7 +11,7 @@ import math
 import re
 import statistics
 
-from verda.agency import score as base
+from verda.agency import comparables, score as base
 
 WEIGHTS = {'opportunity': 0.45, 'purpose': 0.40, 'proximity': 0.15}
 PURPOSE = {'investment': 0.40, 'house': 0.20, 'production': 0.40}
@@ -28,8 +28,6 @@ TREE_NORM = {'zeytin': 28, 'badem': 27, 'incir': 16, 'harnup': 21, 'keçiboynuzu
              'mandalin': 27, 'erik': 18, 'kayısı': 16, 'elma': 20, 'armut': 20, 'şeftali': 40, 'kiraz': 25, 'vişne': 18, 'dut': 20, 'avokado': 21}
 _TREES = '|'.join(sorted(TREE_NORM, key=len, reverse=True))
 _COUNT = re.compile(r'(\d[\d\.]*)\s*(?:adet|tane|ağaç)?\s*(?:yaşlı|yetişkin|meyveli|asırlık|verimli|aşılı)?\s*(' + _TREES + r')\w*', re.I)
-RIDGE_HOOD = 2.0
-TYPES = ('Zeytinlik', 'Bademlik')                                # baseline: Tarla
 LAND = ('Tarla', 'Zeytinlik', 'Bademlik')
 BUILDING_HINT = re.compile(r'(yapı izni|yapı yapıl|ev yapıl|ev yapı|çiftlik evi|bağ evi|tarımsal yapı|yapılaşma|konut izn|imar izni|il tarım)', re.I)
 WATER_HINT = re.compile(r'(su hat|kuyu|su mevcut|suyu var|sulama|su kaynağ|şebeke su)', re.I)
@@ -39,11 +37,6 @@ _MH = re.compile(r'\s+(mh\.?|mah\.?|mahallesi)$', re.I)
 
 def hood_of(name):
     return _MH.sub('', str(name or '')).strip()
-
-
-def _features(kind, area, hood, hoods, types=TYPES):
-    la = math.log(area)
-    return [1.0, la, la * la / 10] + [1.0 if kind == k else 0.0 for k in types] + [1.0 if hood == h else 0.0 for h in hoods]
 
 
 def _solve(A, B):
@@ -62,47 +55,6 @@ def _solve(A, B):
     return [row[n:] for row in M]
 
 
-def fit(peers, types=TYPES):
-    """-> predict(kind, area, hood, listing=None) -> fair TL per m2, and the scatter (sd of log residuals). None when there is too little data.
-
-    A listing that is itself one of the fitted rows is judged without its own price (leave-one-out): otherwise a cheap listing pulls its own
-    fair price down and looks less cheap than it is (131 of 142 ranked listings were in their own data, Oct 2026). Exact for this linear
-    smoother: the prediction without row i is y_i - e_i / (1 - h_i), h_i the row's leverage."""
-    data = [(p['type'], p['area'], hood_of(p['neighborhood']), p['rate'], p.get('weight', 1.0), p.get('ids') or set())
-            for p in peers if p['type'] in LAND and p.get('neighborhood') and p['area'] > 0 and p['rate'] > 0]
-    if len(data) < 30:
-        return None, None
-    hoods = sorted({h for _, _, h, _, _, _ in data})
-    n = 3 + len(types) + len(hoods)
-    A = [[0.0] * n for _ in range(n)]
-    b = [0.0] * n
-    rows = []
-    for kind, area, hood, rate, weight, ids in data:
-        x, y = _features(kind, area, hood, hoods, types), math.log(rate)
-        rows.append((x, y, weight, ids))
-        for i in range(n):
-            b[i] += weight * x[i] * y
-            for j in range(n):
-                A[i][j] += weight * x[i] * x[j]
-    for i in range(n):
-        A[i][i] += RIDGE_HOOD if i >= 3 + len(types) else 1e-6
-    inverse = _solve(A, [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)])
-    w = [sum(inverse[i][j] * b[j] for j in range(n)) for i in range(n)]
-    own = {}                                                    # listing id -> log shift that removes its own row from its fair price
-    for x, y, weight, ids in rows:
-        fitted = sum(wi * xi for wi, xi in zip(w, x))
-        leverage = weight * sum(x[i] * sum(inverse[i][j] * x[j] for j in range(n)) for i in range(n))
-        if ids and leverage < 0.95:
-            shift = (fitted - y) * leverage / (1 - leverage)
-            own.update({i: shift for i in ids})
-
-    def predict(kind, area, hood, listing=None):
-        h = hood_of(hood)
-        return math.exp(sum(wi * xi for wi, xi in zip(w, _features(kind, area, h if h in hoods else None, hoods, types))) + own.get(listing, 0.0))
-    scatter = statistics.pstdev([y - sum(wi * xi for wi, xi in zip(w, x)) for x, y, _, _ in rows])
-    return predict, scatter
-
-
 def opportunity_score(gap_ln):
     return round(max(0, min(100, 50 + 60 * gap_ln)))
 
@@ -117,6 +69,8 @@ def label(gap_ln, scatter):
         return 'Olası fırsat'
     if gap_ln <= -scatter:
         return 'Pahalı'
+    if gap_ln <= -0.5 * scatter:
+        return 'Adilin üstünde'
     return 'Adil fiyat'
 
 
@@ -193,33 +147,51 @@ def proximity(route_minutes_max):
     return UNKNOWN_ROUTE if route_minutes_max is None else base.proximity(route_minutes_max)
 
 
-def listing_view(row, predict, scatter, text, access, sit_known, enclosed=False):
-    """The new numbers for one ranked row (a dict from score.ranking); the old ones are left alone."""
+def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False, hood_effect=0.0):
+    """The new numbers for one ranked row (a dict from score.ranking); the old ones are left alone. `estimate`: comparables.Estimator.estimate, or None."""
     kind, area, price = row['type'], row['area_m2'], row['price_tl']
     road = road_state(access, enclosed)
-    fair = predict(kind, area, row['neighborhood'], row.get('listing_id')) if predict and kind in LAND and area and price else None
+    fair = (estimate or {}).get('fair') if kind in LAND and area and price else None
     near = proximity(row['route_minutes_max'])
+    basis = _basis(estimate) if estimate else None
     if fair is None:
         purpose, parts = purpose_fit(kind, area or 0, road, text, sit_known)
         base_score = WEIGHTS['opportunity'] * 50 + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * near     # no price judgement: the middle
         return {'score': min(49, round(base_score)), 'opportunity': None, 'purpose': purpose, 'proximity': near, 'label': 'Belirsiz', 'road': road,
-                'fair_unit_price': None, 'gap_pct': None, 'caps': [], 'parts': parts}
-    fair_adj = fair
+                'fair_unit_price': None, 'gap_pct': None, 'caps': [], 'parts': parts, 'basis': basis}
     rate = price / area
-    gap_ln = math.log(fair_adj / rate)
-    hood_effect = math.log(predict(kind, area, row['neighborhood']) / predict(kind, area, None))
+    gap_ln = math.log(fair / rate)
     purpose, parts = purpose_fit(kind, area, road, text, sit_known, hood_effect)
     opp = opportunity_score(gap_ln)
     doubt = []
     if gap_ln > TOO_GOOD * scatter:
         # Counted as a strong opportunity and no more until a person has checked the price and the area against the listing and TKGM.
         opp, doubt = min(opp, opportunity_score(scatter)), ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']
+    if estimate['tier'] == 'region':
+        # A regional estimate is only a level: a gap smaller than its own range is not a signal, and never a "strong" one.
+        opp = min(opp, opportunity_score(0.5 * scatter))
     final, capped = combine(opp, purpose, near, price, area, gap_ln, row.get('penalties') or {})
     capped = doubt + capped
     if road == ENCLOSED:
         final, capped = max(0, final - ROAD_QUESTION_PENALTY), capped + ['yol: geçiş hakkı sorusu bekliyor −40']
-    return {'score': final, 'opportunity': opp, 'purpose': purpose, 'proximity': near, 'label': label(gap_ln, scatter), 'road': road,
-            'fair_unit_price': round(fair_adj), 'gap_pct': round(100 * (fair_adj - rate) / fair_adj, 1), 'caps': capped, 'parts': parts}
+    shown = label(gap_ln, scatter)
+    if estimate['tier'] == 'region' and shown in ('Güçlü fırsat', 'Olası fırsat'):
+        shown = 'Adil fiyat'
+    return {'score': final, 'opportunity': opp, 'purpose': purpose, 'proximity': near, 'label': shown, 'road': road,
+            'fair_unit_price': round(fair), 'gap_pct': round(100 * (fair - rate) / fair, 1), 'caps': capped, 'parts': parts, 'basis': basis}
+
+
+def _basis(estimate):
+    """What the fair price rests on, for the dashboard: the step used, the range and the comparables with their links."""
+    out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n')}
+    if estimate.get('low') is not None:
+        out['low'], out['high'] = round(estimate['low']), round(estimate['high'])
+    for key in ('effect_pct', 'reference'):
+        if key in estimate:
+            out[key] = estimate[key]
+    if estimate['tier'] == 'local':
+        out['comps'] = [{'ids': c['ids'], 'rate': c['rate'], 'area': c['area'], 'adjusted': c['adjusted']} for c in estimate.get('comps', [])]
+    return out
 
 
 def excluded_ids(store, mode='local'):
@@ -245,23 +217,16 @@ def rank_all(store, *, mode='local'):
     """The ranked rows with their new view, best first. Reads facts and listing texts from the records."""
     import json
     from verda.agency.research import fact_status
-    gone = excluded_ids(store, mode)
-    # Eliminated listings still show what land asks, but they may lack a road or carry other faults the buyer would not take: half weight.
     known = {}
 
     def status(listing):                                    # one fact read per listing for the whole ranking
         if listing not in known:
             known[listing] = fact_status(store, listing, mode=mode)
         return known[listing]
-    peers = base.peers_from(base.peer_rows(store, mode, status))      # the old archive overlaid by what this system verified
-    for p in peers:
-        p['weight'] = 0.5 if p['ids'] <= gone else 1.0
-    pooled, scatter = fit(peers)
-    tarla, _ = fit([p for p in peers if p['type'] == 'Tarla'], types=())                         # tarla is judged against tarla only (enough parcels)
-
-    def predict(kind, area, hood, listing=None):
-        model = tarla if (kind == 'Tarla' and tarla) else pooled
-        return model(kind, area, hood, listing) if model else None
+    peers = comparables.roads(store, base.peers_from(base.peer_rows(store, mode, status)), known)      # the old archive overlaid by what this system verified
+    estimator = comparables.Estimator(peers, hood_of, LAND, _solve)
+    scatter = estimator.sigma
+    mean_effect = statistics.fmean(estimator.effects.values()) if estimator.effects else 0.0
     ranked = base.ranking(store, {'limit': 1000}, mode=mode, status=status)['ranked']
     texts = {}
     with store.transaction() as con:
@@ -283,8 +248,9 @@ def rank_all(store, *, mode='local'):
         facts = current.get('facts') or {}
         sit_known = 'natural_sit' in facts and 'archaeological_sit' in facts
         # An area in dispute (the official parcel is not what the listing sells) gives a price per m2 that means nothing: no fair-price gap.
-        model = None if 'sale_scope' in (current.get('conflicts') or []) else predict
+        estimate = None if 'sale_scope' in (current.get('conflicts') or []) else estimator.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'])
+        effect = estimator.effects.get(hood_of(row['neighborhood']), mean_effect) - mean_effect       # the neighbourhood against the island's average
         shut = enclosed.get(row['listing_id'], False) and (current.get('seen') or {}).get('corridor_enclosed', True)    # False for a several-deed sale
-        out.append({**row, 'new': listing_view(row, model, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut)})
+        out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, effect)})
     out.sort(key=lambda r: -r['new']['score'])
     return {'ranked': out, 'scatter': scatter}

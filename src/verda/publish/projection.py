@@ -45,7 +45,8 @@ def proposals_of(store, listing_id, mode='local', limit=6):
     with store.transaction() as con:
         rows = [dict(r) for r in con.execute("SELECT id,field,value,status,reason,quote,source_ref,created_at FROM claims WHERE listing_ref=? AND mode=? AND source_kind='thread' "
                                              "AND status IN ('rejected','needs_review') ORDER BY created_at DESC", (listing_id, mode))]
-        accepted = {(r['field'], r['value']) for r in con.execute("SELECT field,value FROM claims WHERE listing_ref=? AND mode=? AND status='accepted'", (listing_id, mode))}
+        accepted = {(r['field'], r['value']) for r in con.execute("SELECT field,value FROM claims c WHERE listing_ref=? AND mode=? AND status='accepted' "
+                                                                  "AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=c.id AND w.status='withdrawn')", (listing_id, mode))}
     out, seen = [], set()
     for r in rows:
         key = (r['field'], r['value'])

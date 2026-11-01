@@ -116,8 +116,10 @@ def listing_route(store, args, *, mode, policy=None, fetch=get_json, sleep=time.
     from verda.policy import Policy
     policy = policy or Policy()
     listing = args['listing_id']
+    from verda.agency.research import fact_status
+    parcels = fact_status(store, listing, mode=mode).get('parcels')
     with store.transaction() as con:
-        parcel = main_lookup(con, listing, mode)               # the listing's own parcel, not an extra deed of the same sale
+        parcel = main_lookup(con, listing, mode, parcels)      # the sale's own parcel (not an extra deed, not a number the user has corrected away)
     if not parcel or parcel.get('found') is not True:
         return {'listing_id': listing, 'engines': [], 'reason': 'official_parcel_required'}
     lon, lat = parcel['geometry']['centroid']

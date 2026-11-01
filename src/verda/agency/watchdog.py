@@ -126,14 +126,12 @@ def replies_waiting(store, mode, now):
 # ---- reading the inbox ---------------------------------------------------------------------------------------------------------
 def conversation_lost(store, mode, now):
     """A conversation once opened is never "not found" afterwards: the latest read of every such listing must have found it."""
+    from verda.agency.inbox import lost_conversations
     with store.transaction() as con:
         states = _latest_states(con, mode)
-        reads = {}
-        for r in con.execute("SELECT listing_ref, json_extract(payload,'$.found') AS found FROM observations WHERE tool='sahibinden.read_thread' AND mode=? ORDER BY captured_at, id", (mode,)):
-            reads.setdefault(r['listing_ref'], []).append(bool(r['found']))
-    lost = [l for l, f in reads.items() if any(f) and not f[-1] and states.get(l, ('', []))[0] not in ('excluded', 'outside_search')]
+    lost = [l for l in lost_conversations(store, mode) if states.get(l, ('', []))[0] not in ('excluded', 'outside_search')]
     return [_finding('conversation_lost', ACTION, f'{len(lost)} ilanın konuşması son okumada bulunamadı',
-                     'Bu konuşmalar daha önce okunmuştu. Yeniden bulunana kadar bu ilanlara soru gitmez; okuma tekrarlanacak.', lost)] if lost else []
+                     'Bu konuşmalar daha önce okunmuştu. Yeniden bulunana kadar bu ilanlara soru gitmez; kuyruk günde bir kez yeniden okutur.', lost)] if lost else []
 
 
 def inbox_list_short(store, mode, now):
@@ -228,6 +226,27 @@ def stale_listings(store, mode, now):
                      'Ne aramada ne ilan sayfasında görüldü; satılmış, kalkmış ya da fiyatı değişmiş olabilir.', stale)] if stale else []
 
 
+def stuck_work(store, mode, now):
+    """Work the system set aside after repeated failures is shown, not forgotten: a step that failed `queue.stuck_after` times today is not tried again until
+    tomorrow, and an inbox row twice. That is right for a failing step and wrong when nobody can see it: two unread conversations sat unread for a day."""
+    from verda.agency import inbox
+    from verda.agency.tuning import number
+    limit = number(store, 'queue.stuck_after')
+    with store.transaction() as con:
+        steps = [dict(r) for r in con.execute(
+            "SELECT tool, json_extract(arguments,'$.listing_id') AS listing, count(*) AS n FROM tool_calls WHERE state IN ('failed','uncertain') AND finished_at>? "
+            "AND json_extract(arguments,'$.listing_id') IS NOT NULL GROUP BY 1,2 HAVING n>=?", (now - DAY, limit))]
+        # a step that succeeded afterwards is no longer stuck
+        steps = [s for s in steps if not con.execute("SELECT 1 FROM tool_calls WHERE tool=? AND state='complete' AND json_extract(arguments,'$.listing_id')=? AND finished_at>? LIMIT 1",
+                                                      (s['tool'], s['listing'], now - DAY)).fetchone()]
+    rows = [key for key, n in inbox.failed_row_counts(store, now).items() if n >= inbox.STUCK_ROW_AFTER]
+    if not steps and not rows:
+        return []
+    kinds = sorted({s['tool'] for s in steps} | ({'sahibinden.read_thread (gelen kutusu satırı)'} if rows else set()))
+    return [_finding('stuck_work', ACTION, f'{len(steps) + len(rows)} iş bugün tekrar tekrar başarısız oldu ve yarına bırakıldı',
+                     'Otomatik denenmiyor: ' + ', '.join(kinds) + '. Nedeni çözülmedikçe aynı iş yarın yine takılır.', [s['listing'] for s in steps], count=len(steps) + len(rows))]
+
+
 def publisher_silent(store, mode, now):
     """The dashboard is fed: the publisher wrote within the last twenty minutes."""
     status = Path(store.path).parent / 'publisher-status.json'
@@ -267,6 +286,7 @@ RULES = (
     ('inbox_list_short', 'Gelen kutusu listesi eksik kalmaz', inbox_list_short),
     ('exclusion_doubt', 'Alan elemesi doğru araziye dayanır', exclusion_doubt),
     ('step_loop', 'Aynı adım döngüye girmez', step_loop),
+    ('stuck_work', 'Takılan iş görünür kalır', stuck_work),
     ('tool_failures', 'Araçların hata oranı', tool_failures),
     ('scan_coverage', 'Pazarın tamamı taranır', scan_coverage),
     ('stale_listings', 'Aktif ilanlar haftada bir görülür', stale_listings),

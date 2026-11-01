@@ -233,3 +233,22 @@ def test_an_unread_inbox_card_with_a_long_preview_is_still_offered_as_a_click_ta
     limit = int(re.search(r't\.length>(\d+)', jev.CLICKABLES).group(1))
     # the two unread cards of 1 Nov 2026 were 395 and 351 characters; with a limit of 300 neither could ever be opened
     assert limit >= 1000
+
+
+# ---- the ministry's sit map asks for a login ---------------------------------------------------------------------------------------------------------
+def test_the_sit_map_answering_401_stops_the_source_instead_of_failing_every_listing(monkeypatch):
+    import io
+    import urllib.error
+    from verda.agency import says
+    from verda.agency.registry import ResourceBlocked
+    def answer(code):
+        def urlopen(request, timeout=0):
+            raise urllib.error.HTTPError(request.full_url, code, 'x', {}, io.BytesIO(b''))
+        return urlopen
+    for code in (401, 403, 429):
+        monkeypatch.setattr(says.urllib.request, 'urlopen', answer(code))
+        with pytest.raises(ResourceBlocked, match=f'says_http_{code}'):
+            says._get('https://example.test/layer')
+    monkeypatch.setattr(says.urllib.request, 'urlopen', answer(500))
+    with pytest.raises(urllib.error.HTTPError):                                  # a server error is not a block
+        says._get('https://example.test/layer')

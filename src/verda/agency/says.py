@@ -7,9 +7,12 @@ the numbers into a natural-sit value (facts.extract) and the rule engine does th
 import hashlib
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from verda.agency.registry import ResourceBlocked
 
 LAYER_URL = 'https://tvksaysgis.csb.gov.tr/geoserver/tabiatvarlik/ows'
 LAYER = 'tabiatvarlik:VatandasSitAlani'
@@ -19,10 +22,18 @@ COUNTS_FROM = 0.05                                   # less than 5 % of the parc
 DEGREES = {'1': 'first', '2': 'second', '3': 'third'}
 
 
+BLOCKING_CODES = {401, 403, 429}          # the ministry's server asks for a login (401, since about 23 Oct 2026) or says slow down: the source stops, nothing is tried around it
+
+
 def _get(url, timeout=60):
     request = urllib.request.Request(url, headers={'User-Agent': 'verda/2 (read-only sit overlay)'})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code in BLOCKING_CODES:
+            raise ResourceBlocked(f'says_http_{error.code}') from None      # one incident on the status page instead of a failed call per listing
+        raise
 
 
 def layer(cache_path, now=None, fetch=_get):

@@ -74,10 +74,12 @@ def test_an_extra_deed_looked_up_last_does_not_replace_the_main_parcel_outline_o
         seen.update(origin)
         return {'engines': []}
     real, geo.route = geo.route, fake_route
+    import verda.agency.research as research
+    real_status, research.fact_status = research.fact_status, lambda store, listing, mode='local': {'parcels': ['402/5', '402/7']}
     try:
         geo.listing_route(store, {'listing_id': 'L1'}, mode='local')
     finally:
-        geo.route = real
+        geo.route, research.fact_status = real, real_status
     assert seen['parcel_key'] == '402/5'
 
 
@@ -329,3 +331,65 @@ def test_work_set_aside_after_repeated_failures_is_a_finding_until_something_suc
     _call(store, 'sahibinden.read_thread', row, 'complete', now - 600)                         # the row opened afterwards
     _call(store, 'sit.says', {'listing_id': '1000000106'}, 'complete', now - 600)
     assert watchdog.stuck_work(store, 'local', now) == []
+
+
+# ---- second review: a corrected parcel, and a withdrawn claim settles nothing ---------------------------------------------------------------------
+def _observation(store, tool, listing, payload, at):
+    import uuid
+    oid = uuid.uuid4().hex
+    _sql(store, 'INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', oid, uuid.uuid4().hex, 'T', 'a', 't', listing, 'local', tool, 'x', 'tool_observation', at, '{}',
+         json.dumps(payload), uuid.uuid4().hex, '{}')
+    return oid
+
+
+def test_a_route_measured_from_another_parcel_cannot_speak_for_the_sale(tmp_path):
+    from verda.facts.service import with_parcels
+    store = _store(tmp_path)
+    _observation(store, 'tkgm.lookup', 'L1', {'found': True, 'parcel_key': '9/10'}, 1.0)
+    wrong = _observation(store, 'geo.route', 'L1', {'origin': {'parcel_key': '9/9'}, 'engines': []}, 2.0)
+    right = _observation(store, 'geo.route', 'L1', {'origin': {'parcel_key': '9/10'}, 'engines': []}, 3.0)
+    with store.transaction() as con:
+        rows = with_parcels(con, [{'observation_id': wrong}, {'observation_id': right}], 'L1', 'local')
+    assert [r['parcel'] for r in rows] == ['9/9', '9/10']            # assemble then sets aside what is bound to a parcel outside the sale
+
+
+def test_a_corridor_check_of_another_parcel_does_not_mark_the_sale_enclosed(tmp_path):
+    from verda.facts.service import FactService
+    store = _store(tmp_path)
+    _observation(store, 'tkgm.corridor', 'L1', {'verdict': 'all_edges_numbered_neighbors', 'parcel_key': '9/9'}, 1.0)
+    with store.transaction() as con:
+        assert FactService.seen(con, 'L1', 'local', ['9/9'])['corridor_enclosed'] is True
+        assert FactService.seen(con, 'L1', 'local', ['9/10'])['corridor_enclosed'] is False
+        assert FactService.seen(con, 'L1', 'local')['corridor_enclosed'] is True                 # no parcels known: as before
+
+
+def test_a_review_item_comes_back_when_the_user_takes_back_the_correction_that_had_settled_it(tmp_path):
+    import uuid
+    from verda.publish import projection
+    store = _store(tmp_path)
+    with store.transaction() as con:
+        con.execute('INSERT INTO claims(id,listing_ref,mode,field,value,scope,source_kind,key,observation_id,source_ref,quote,subject,proposer,status,grade,reason,resolves,verifier,created_at,dedupe_key) '
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, 'L1', 'local', 'natural_sit', '"none"', 'listing', 'thread', None, None, None, 'Sit yok', 'x',
+                                                                      'llm:test', 'needs_review', None, 'hedged', None, 'v3', 1.0, uuid.uuid4().hex))
+        assert len(store.facts.review_items(con, 'L1', 'local')) == 1
+        store.facts.decide(con, 'L1', 'local', 'natural_sit', 'none', 'panoda', 2.0)
+        assert store.facts.review_items(con, 'L1', 'local') == []                      # answered by the user
+    assert projection.proposals_of(store, 'L1') == []
+    with store.transaction() as con:
+        store.facts.withdraw(con, 'L1', 'local', 'natural_sit', 'geri alındı', 3.0)
+        assert len(store.facts.review_items(con, 'L1', 'local')) == 1                  # nothing settles it any more
+    assert len(projection.proposals_of(store, 'L1')) == 1
+
+
+def test_a_route_is_asked_again_from_the_corrected_parcel_not_the_old_one(tmp_path):
+    from verda.agency import corridor, geo
+    import verda.agency.research as research
+    store = _store(tmp_path)
+    _observation(store, 'tkgm.lookup', 'L1', {'found': True, 'parcel_key': '9/9', 'geometry': {'type': 'Polygon', 'ring': _ring(27.1), 'centroid': [27.13, 36.13]}}, 1.0)
+    real_status = research.fact_status
+    research.fact_status = lambda store, listing, mode='local': {'parcels': ['9/10']}          # the user says it is 9/10, which was never looked up
+    try:
+        assert geo.listing_route(store, {'listing_id': 'L1'}, mode='local')['reason'] == 'official_parcel_required'
+        assert corridor.listing_corridor(store, {'listing_id': 'L1'}, mode='local')['reason'] == 'official_parcel_with_geometry_required'
+    finally:
+        research.fact_status = real_status

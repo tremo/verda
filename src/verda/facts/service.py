@@ -45,7 +45,7 @@ def decode_claim(row) -> dict:
     return {**dict(row), 'value': json.loads(row['value'])}
 
 
-PARCEL_BOUND = ('tkgm.lookup', 'sit.says', 'tkgm.corridor', 'tkgm.neighbors')
+PARCEL_BOUND = ('tkgm.lookup', 'sit.says', 'tkgm.corridor', 'tkgm.neighbors', 'geo.route')
 
 
 def with_parcels(con, rows, listing_ref, mode):
@@ -61,7 +61,7 @@ def with_parcels(con, rows, listing_ref, mode):
         if not found:
             continue
         tool, at, payload = found
-        named = payload.get('parcel_key') if isinstance(payload, dict) else None
+        named = (payload.get('parcel_key') or (payload.get('origin') or {}).get('parcel_key')) if isinstance(payload, dict) else None      # a route names its start
         if tool == 'tkgm.lookup' or named:
             c['parcel'] = named
         else:
@@ -269,7 +269,7 @@ class FactService:
 
     # ---- read model -----------------------------------------------------------------------
     @staticmethod
-    def seen(con, listing_ref, mode) -> dict:
+    def seen(con, listing_ref, mode, parcels=None) -> dict:
         tools = {r['tool'] for r in con.execute('SELECT tool FROM observations WHERE listing_ref=? AND mode=?', (listing_ref, mode))}
         tools |= {r['tool'] for r in con.execute('''SELECT DISTINCT o.tool FROM claims c JOIN observations o ON o.id=c.observation_id
             WHERE c.listing_ref=? AND c.mode=?''', (listing_ref, mode))}
@@ -279,7 +279,8 @@ class FactService:
         if 'tkgm.corridor' in tools:
             row = con.execute("SELECT payload FROM observations WHERE listing_ref=? AND mode=? AND tool='tkgm.corridor' ORDER BY captured_at DESC, id DESC LIMIT 1", (listing_ref, mode)).fetchone()
             try:
-                enclosed = json.loads(row['payload']).get('verdict') == 'all_edges_numbered_neighbors'
+                checked = json.loads(row['payload'])
+                enclosed = checked.get('verdict') == 'all_edges_numbered_neighbors' and (not parcels or checked.get('parcel_key') in (None, parcels[0]))
             except (TypeError, ValueError):
                 enclosed = False
         return {'listing_read': LISTING in tools, 'thread_read': THREAD in tools, 'in_search': SEARCH in tools, 'listing_removed': removed,
@@ -291,7 +292,8 @@ class FactService:
         # An item ends when it is answered, or when the same field later got an accepted value (the same answer, now verified).
         rows = con.execute('''SELECT * FROM claims c WHERE listing_ref=? AND mode=? AND status='needs_review'
             AND NOT EXISTS (SELECT 1 FROM claims r WHERE r.resolves=c.id)
-            AND NOT EXISTS (SELECT 1 FROM claims a WHERE a.listing_ref=c.listing_ref AND a.mode=c.mode AND a.field=c.field AND a.status='accepted' AND a.seq>c.seq)
+            AND NOT EXISTS (SELECT 1 FROM claims a WHERE a.listing_ref=c.listing_ref AND a.mode=c.mode AND a.field=c.field AND a.status='accepted' AND a.seq>c.seq
+                AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=a.id AND w.status='withdrawn'))
             ORDER BY seq''', (listing_ref, mode)).fetchall()
         return [decode_claim(r) for r in rows]
 
@@ -309,7 +311,7 @@ class FactService:
             # The old system's exclusion stands until someone reopens the listing: whatever the new records say, it is not a candidate.
             decision = Decision(state='excluded', policy_version=policy.version, reasons=['legacy_excluded'] + (decision.reasons if decision and decision.state == 'excluded' else []),
                                 conditions=[], penalties={})
-        seen = self.seen(con, listing_ref, mode)
+        seen = self.seen(con, listing_ref, mode, assembled.parcels)
         if len(assembled.parcels) > 1:
             seen['corridor_enclosed'] = False   # the main parcel may reach the road through another deed of the same sale: not conclusive
         review = self.review_items(con, listing_ref, mode)

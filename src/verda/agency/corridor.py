@@ -191,10 +191,11 @@ def analyse(subject: dict, fetch=fetch_json, sleep=time.sleep, delay=PROBE_DELAY
 
 def listing_corridor(store, args, *, mode, fetch=fetch_json, sleep=time.sleep):
     listing = args['listing_id']
+    from verda.agency.research import fact_status
+    from verda.facts.service import main_lookup
+    parcels = fact_status(store, listing, mode=mode).get('parcels')
     with store.transaction() as con:
-        row = con.execute("""SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? AND json_extract(payload,'$.part') IS NULL
-            ORDER BY captured_at DESC LIMIT 1""", (mode, listing)).fetchone()      # the sale's main parcel, not a further deed
-    parcel = json.loads(row['payload']) if row else None
+        parcel = main_lookup(con, listing, mode, parcels)      # the sale's main parcel, not a further deed and not a number the user has corrected away
     ring = ((parcel or {}).get('geometry') or {}).get('ring')
     if not parcel or parcel.get('found') is not True or not ring:
         return {'listing_id': listing, 'reason': 'official_parcel_with_geometry_required'}

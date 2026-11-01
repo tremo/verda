@@ -62,7 +62,8 @@ def open_flags(con, listing_ref=None, mode='local'):
         where += ' AND listing_ref=?'; params.append(listing_ref)
     out = []
     for f in con.execute(f'SELECT * FROM listing_flags WHERE {where} ORDER BY created_at', params):
-        settled = con.execute("SELECT 1 FROM claims WHERE listing_ref=? AND mode=? AND field=? AND status='accepted' AND created_at>? LIMIT 1",
+        settled = con.execute("SELECT 1 FROM claims c WHERE listing_ref=? AND mode=? AND field=? AND status='accepted' AND created_at>? "
+                              "AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=c.id AND w.status='withdrawn') LIMIT 1",
                               (f['listing_ref'], mode, f['field'], f['created_at'])).fetchone()
         if not settled:
             out.append(dict(f))

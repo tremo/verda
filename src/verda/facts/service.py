@@ -12,6 +12,7 @@ from verda.facts.verify import VERIFIER, source_kind, verify
 from verda.legacy import canonical, digest
 from verda.policy import Decision, Policy, ScreeningFacts, evaluate
 
+WITHDRAWN = 'withdrawn'        # a row that takes one of the user's own claims back; the claim stays in the log, the loader skips it
 STATE_ORDER = ('excluded', 'outside_search', 'research_required', 'conditional', 'eligible')
 
 
@@ -69,6 +70,21 @@ def with_parcels(con, rows, listing_ref, mode):
     return rows
 
 
+def main_lookups(con, listing_ref, mode, parcels=None):
+    """The listing's own parcel records from TKGM, newest first: the lookups that are not an extra deed of a several-deed sale (`part`). With `parcels`
+    (the sale's parcels, main first) only lookups of that parcel, so a wrong number the user has since corrected cannot speak for the sale."""
+    rows = [json.loads(r['payload']) for r in con.execute(
+        "SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at DESC, id DESC", (mode, listing_ref))]
+    mains = [p for p in rows if isinstance(p, dict) and not p.get('part')]
+    return [p for p in mains if p.get('parcel_key') == parcels[0]] if parcels else mains
+
+
+def main_lookup(con, listing_ref, mode, parcels=None):
+    """The newest of `main_lookups`; None when there is none."""
+    found = main_lookups(con, listing_ref, mode, parcels)
+    return found[0] if found else None
+
+
 class FactService:
     # ---- claims ---------------------------------------------------------------------------
     @staticmethod
@@ -111,6 +127,21 @@ class FactService:
         result = self.submit(con, Proposal(listing_ref=listing_ref, field=field, value=value, proposer='user',
                                            mode=mode, quote=(note or None)), now=now)
         if assess and result['status'] == 'accepted':
+            result['assessment'] = self.assess(con, listing_ref, mode, now)
+        return result
+
+    def withdraw(self, con, listing_ref, mode, field, note, now, *, assess=True) -> dict:
+        """"Leave it as the system has it": takes back every claim the user still holds on one field. The claims stay in the append-only log; a
+        `withdrawn` row points at each and the loader skips it, so whatever was known before the user spoke decides again. Nothing to take back is not an error."""
+        held = con.execute("SELECT * FROM claims c WHERE listing_ref=? AND mode=? AND field=? AND status='accepted' AND proposer='user' "
+                           "AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=c.id AND w.status=?)", (listing_ref, mode, field, WITHDRAWN)).fetchall()
+        for old in held:
+            con.execute('''INSERT OR IGNORE INTO claims(id,listing_ref,mode,field,value,scope,source_kind,key,observation_id,source_ref,quote,subject,
+                proposer,status,grade,reason,resolves,verifier,created_at,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (uuid4().hex, listing_ref, mode, field, old['value'], old['scope'], old['source_kind'], old['key'], None, None, (note or None), old['subject'],
+                 'user', WITHDRAWN, None, 'withdrawn_by_user', old['id'], VERIFIER, now, digest({'withdraw': old['id']})))
+        result = {'withdrawn': len(held)}
+        if held and assess:
             result['assessment'] = self.assess(con, listing_ref, mode, now)
         return result
 
@@ -193,7 +224,8 @@ class FactService:
     @staticmethod
     def claims(con, listing_ref, mode, status='accepted') -> list[dict]:
         rows = [decode_claim(r) for r in con.execute(
-            'SELECT * FROM claims WHERE listing_ref=? AND mode=? AND status=? ORDER BY seq', (listing_ref, mode, status))]
+            'SELECT * FROM claims c WHERE listing_ref=? AND mode=? AND status=? AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=c.id AND w.status=?) '
+            'ORDER BY seq', (listing_ref, mode, status, WITHDRAWN))]
         return with_parcels(con, rows, listing_ref, mode)
 
     @staticmethod
@@ -290,9 +322,7 @@ class FactService:
             return {'claim_id': c['id'], 'value': c['value'], 'grade': c['grade'], 'proposer': c['proposer'],
                     'source_kind': c['source_kind'], 'source_ref': c['source_ref'], 'quote': (c['quote'] or '')[:300] or None}
         basis = assembled.basis()
-        official = con.execute("SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at DESC LIMIT 1",
-                               (mode, listing_ref)).fetchone()
-        official = json.loads(official['payload']) if official else None
+        official = main_lookup(con, listing_ref, mode, assembled.parcels)
         return {
             'links': {'sahibinden': f'https://www.sahibinden.com/{listing_ref}', 'tkgm': (official or {}).get('parcel_url')},
             'official_parcel': None if official is None else (

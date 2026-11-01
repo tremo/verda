@@ -17,6 +17,11 @@ def test_account(monkeypatch):
     monkeypatch.setitem(access.ACCOUNT, 'name', TEST_ACCOUNT)
 
 
+@pytest.fixture(autouse=True)
+def no_desktop_notifications(monkeypatch):
+    monkeypatch.setenv('VERDA_NOTIFY', 'off')               # a test must never put a banner on the developer's screen
+
+
 @pytest.fixture
 def engine(tmp_path):
     engine = connect(f"sqlite:///{tmp_path / 'v2.sqlite'}")

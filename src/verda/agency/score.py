@@ -18,8 +18,8 @@ RATE_RANGE = (50, 250_000)
 
 
 def market_type(official_type, title=None):
-    official = str(official_type or '').lower()
-    text = official if official and official != '—' else str(title or '').lower()
+    official = str(official_type or '').strip()
+    text = fold(official) if official and official != '—' else fold(title or '')      # folded: "ZEYTİNLİK" is "zeytinlik"
     for needle, label in (('zeytin', 'Zeytinlik'), ('badem', 'Bademlik')):
         if needle in text:
             return label

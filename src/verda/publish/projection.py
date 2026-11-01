@@ -69,16 +69,15 @@ def facts_of(store, current, mode='local', quote_cap=200):
                 'quote': (v.get('quote') or '')[:quote_cap] or None} for k, v in shown.items()}
 
 
-def parcel_shape(store, listing_id, mode='local'):
-    """The parcel's outline from the newest TKGM lookup, in the dashboard's own wrapping (Firestore takes no array inside an array, so a list of
-    points travels as {items: [...]}). None when the lookup found no outline."""
+def parcel_shape(store, listing_id, mode='local', parcels=None):
+    """The listing's own parcel outline from its TKGM lookups, in the dashboard's own wrapping (Firestore takes no array inside an array, so a list
+    of points travels as {items: [...]}). None when the listing's own parcel has no outline: a lookup of another parcel (an extra deed, or a number the user
+    has since corrected) is never drawn in its place."""
+    from verda.facts.service import main_lookups
     with store.transaction() as con:
-        rows = con.execute("SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at DESC, id DESC", (mode, listing_id)).fetchall()
-    for row in rows:
-        try:
-            geometry = json.loads(row['payload']).get('geometry') or {}
-        except ValueError:
-            continue
+        lookups = main_lookups(con, listing_id, mode, parcels)
+    for lookup in lookups:                       # a newer lookup that found no outline does not hide the older outline of the same parcel
+        geometry = lookup.get('geometry') or {}
         ring = geometry.get('ring')
         if geometry.get('type') == 'Polygon' and isinstance(ring, list) and len(ring) >= 4 and isinstance(geometry.get('centroid'), list):
             return {'geometry': {'type': 'Polygon', 'coordinates': [{'items': [{'items': [float(x), float(y)]} for x, y in ring]}]}, 'centroid': [float(c) for c in geometry['centroid']]}
@@ -143,7 +142,7 @@ def listing_document(store, row, now_iso, *, mode='local', new=None):
         'areaConflict': area_conflict(current),
         'parcels': sale_parcels_view(store, row['listing_id'], current, mode),
         'photos': photo_ids(store, row['listing_id'], mode),
-        **(parcel_shape(store, row['listing_id'], mode) or {}),
+        **(parcel_shape(store, row['listing_id'], mode, current.get('parcels')) or {}),
         'updatedAt': now_iso,
     }
 

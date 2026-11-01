@@ -113,10 +113,17 @@ Güçlüden zayıfa: `kullanici` · `resmi` · `bagimsiz` · `beyan` · `rapor`.
 - **Resmî sit** satışın bütün parsellerine bakar, en kısıtlayıcı sonuç geçerlidir; parseller değişince yeniden çalışır (`says.stale`). **Yol koridoru** ana parselde çalışır; çok parselli satışta "kenarlar komşu parsel" sonucu kesin sayılmaz (yol kardeş parselden olabilir).
 - **`user_excluded`** (kullanıcının "ele" kararı, panodaki "İlgilenmiyorum" dahil): kesin eleme, ilan için başka iş yapılmaz. **`scope_question`**: alan uyuşmazlığında kullanıcı "satıcıya sor" derse sabit şablonla "ilanda X m², tapu kaydında Y m²; tamamı mı, bir kısmı mı, hisse mi?" sorulur; cevap hisse ise `shared_title`, başka parseller ise `sale_parcels` önerilir, belirsizse işaretlenir.
 
-## Henüz yok
+## 7 Ekim'de eksik olanlar ve 1 Kasım'daki durum
 
-- LLM'in öneri aracı (`facts.propose`): doğrulayıcı hazır ve testli, araç ve yönerge bağlantısı sıradaki dilim.
-- İnceleme kuyruğu için panel ekranı (şimdilik CLI).
-- Araç sınırı kapıları (`listing_ref` ↔ `listing_id` çapraz kontrolü, eski sistemde elenmişe okuma görevi açmama): `facts.status` bilgiyi verir, motor henüz zorlamaz.
-- TKGM, rota, sit kesişimi, konuşma okuma, mesaj uygunluğu ve gönderim.
-- Dashboard'a (Firestore) yayın; `listingFeedback` geri alma kanalı.
+Yapıldı: TKGM sorgusu, rota, sit kesişimi (`sit.says`), konuşma okuma, mesaj uygunluğu ve gönderimi (`docs/MESAJ-GONDERME.md`; mod şu an kapalı), pano yayını (`publish/`) ve `listingFeedback` geri alma kanalı (aşağıda), LLM öneri aracı `facts.propose`.
+
+Bu belge yazılırken yeniden kontrol edilmedi (eskimiş olabilir): inceleme kuyruğu için ayrı panel ekranı, araç sınırı kapıları (`listing_ref` ↔ `listing_id` çapraz kontrolü, eski sistemde elenmişe okuma görevi açmama).
+
+## Panodaki düzeltmeyi geri alma (1 Kasım)
+
+Panoda bir düzeltme yapılınca (`userFacts`) kullanıcı derecesinde bir iddia olur. "Sistemdeki gibi bırak" bu anahtarı Firestore'dan siler; yayıncı bunu bir sonraki turda görür ve `FactService.withdraw` ile o alandaki kullanıcı iddialarını **geri çeker**:
+
+- İddialar silinmez (tablo yalnız eklenir). Her biri için `status='withdrawn'`, `resolves=<iddia kimliği>` olan bir satır eklenir; `FactService.claims` bu iddiaları atlar, böylece kullanıcıdan önce bilinen ne varsa o yeniden karar verir.
+- Alandaki **bütün** aktif kullanıcı iddiaları geri çekilir; yoksa eski bir düzeltme yeniden ortaya çıkardı.
+- Hangi anahtarların içeri alındığı `runtime_settings` içinde `feedback:held` olarak tutulur. Silinme yalnız bu kayıttan anlaşılır.
+- "Kararı kaldır" (`decision: ''`) panodan gelen `user_excluded=True` kaydını geri alır. Karar olmadan yalnız not kaydedildiğinde de `''` gelir; bu yüzden yalnız panodan gelen elemeyi geri alır, başka yoldan verilen elemeye dokunmaz.

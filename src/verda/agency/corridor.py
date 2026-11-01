@@ -14,6 +14,7 @@ import urllib.error
 
 from verda.agency.registry import ResourceBlocked, TransientToolError
 from verda.agency.tkgm import BASE, fetch_json
+from verda.facts.text import fold
 
 NEAR_M = 2.5                 # first probe: just outside the edge
 FAR_M = (8, 15, 25, 40)      # across a gap: where is the other bank?
@@ -75,7 +76,7 @@ ROAD_WORDS = ('yol', 'patika', 'geçit')
 
 def is_road_type(nitelik) -> bool:
     """A numbered neighbour whose own land type is a road is road frontage, not a neighbour."""
-    return isinstance(nitelik, str) and any(w in nitelik.lower() for w in ROAD_WORDS)
+    return isinstance(nitelik, str) and any(fold(w) in fold(nitelik) for w in ROAD_WORDS)
 
 
 def probe(fetch, lon, lat):

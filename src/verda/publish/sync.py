@@ -94,6 +94,12 @@ def sync(store, firestore, *, dry_run=False, manifest_path=MANIFEST, mode='local
     summary = {'documents': len(docs), 'to_write': len(writes), 'to_delete': len(deletes), 'photos_to_write': len(assets), 'dry_run': dry_run}
     if dry_run:
         return summary
+    try:                                           # a problem that has stayed on the status page is told on this Mac too; failing to tell never stops the publish
+        from verda.publish import notify
+        page = next((data for collection, doc_id, data in docs if (collection, doc_id) == ('meta', 'v2status')), None)
+        summary['notified'] = len(notify.notify(store, (page or {}).get('health') or [], now))
+    except Exception:
+        summary['notified'] = 0
     group, size = [], 0
     for key, write in assets:                      # photos first, so an overlay never names a photo that is not there yet
         piece = len(json.dumps(write, ensure_ascii=False))

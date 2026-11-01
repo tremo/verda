@@ -12,7 +12,7 @@ ROUTE = 'geo.route'
 CORRIDOR = 'tkgm.corridor'
 NEIGHBORS = 'tkgm.neighbors'
 SAYS = 'sit.says'
-EXTRACTORS = frozenset({LISTING, SEARCH, TKGM, ROUTE, CORRIDOR, SAYS})
+EXTRACTORS = frozenset({LISTING, SEARCH, TKGM, ROUTE, CORRIDOR, NEIGHBORS, SAYS})
 SAYS_VALUE = {'none': 'none', 'first': 'first_degree', 'second': 'second_degree', 'third': 'third_degree'}
 _ADA_PARSEL = re.compile(r'^\s*(\d+)\s*/\s*(\d+)\s*$')
 

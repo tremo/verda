@@ -45,12 +45,17 @@ def failed_row_counts(store, now=None):
     now = time.time() if now is None else now
     out = Counter()
     with store.transaction() as con:
-        for r in con.execute("SELECT arguments FROM tool_calls WHERE tool='sahibinden.read_thread' AND state='failed' AND arguments LIKE '%\"row\"%' AND started_at>?", (now - 86400,)):
+        for r in con.execute("SELECT arguments, state FROM tool_calls WHERE tool='sahibinden.read_thread' AND state IN ('failed','complete') AND arguments LIKE '%\"row\"%' "
+                             "AND started_at>? ORDER BY started_at", (now - 86400,)):
             try:
                 row = json.loads(r['arguments']).get('row') or {}
             except ValueError:
                 continue
-            out[(fold(row.get('title', '')), fold(row.get('counterpart') or ''))] += 1
+            key = (fold(row.get('title', '')), fold(row.get('counterpart') or ''))
+            if r['state'] == 'complete':
+                out.pop(key, None)                  # it opened afterwards: whatever stopped it is gone, the earlier failures no longer count
+            else:
+                out[key] += 1
     return out
 
 
@@ -172,6 +177,15 @@ def known_titles(store, max_full_age=8 * 86400, now=None):
     if base is None:
         return None
     return {fold(r['title']) for _, p in lists[base:] for r in p['rows']}
+
+
+def lost_conversations(store, mode='local'):
+    """Listings whose conversation an earlier read opened and whose latest read did not find: a conversation does not vanish, so the read failed."""
+    reads = {}
+    with store.transaction() as con:
+        for r in con.execute("SELECT listing_ref, json_extract(payload,'$.found') AS found FROM observations WHERE tool='sahibinden.read_thread' AND mode=? ORDER BY captured_at, id", (mode,)):
+            reads.setdefault(r['listing_ref'], []).append(bool(r['found']))
+    return {listing for listing, found in reads.items() if any(found) and not found[-1]}
 
 
 def found_before(store, listing_id, mode='local'):

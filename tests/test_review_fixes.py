@@ -252,3 +252,80 @@ def test_the_sit_map_answering_401_stops_the_source_instead_of_failing_every_lis
     monkeypatch.setattr(says.urllib.request, 'urlopen', answer(500))
     with pytest.raises(urllib.error.HTTPError):                                  # a server error is not a block
         says._get('https://example.test/layer')
+
+
+# ---- a conversation that went missing is read again without a question waiting -------------------------------------------------------------------------
+def _sql(store, query, *args):
+    con = sqlite3.connect(store.path)
+    con.execute('PRAGMA foreign_keys=OFF')
+    with con:
+        con.execute(query, args)
+    con.close()
+
+
+def _thread_read(store, listing, found, at):
+    import uuid
+    _sql(store, 'INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', uuid.uuid4().hex, uuid.uuid4().hex, 'T', 'sahibinden', 't', listing, 'local', 'sahibinden.read_thread',
+         'sahibinden', 'tool_observation', at, '{}', json.dumps({'found': found, 'messages': []}), uuid.uuid4().hex, '{}')
+
+
+def _call(store, tool, arguments, state, at, listing_state='x'):
+    import uuid
+    _sql(store, 'INSERT INTO tool_calls(id,task_id,tool,resource,effect,state,arguments,result,started_at,finished_at,attempt) VALUES(?,?,?,?,?,?,?,?,?,?,1)',
+         uuid.uuid4().hex, 'T', tool, 'r', 'read', state, json.dumps(arguments), None, at, at + 5)
+
+
+def test_a_conversation_read_once_and_then_not_found_is_handed_out_again_once_a_day_even_with_sending_off(tmp_path):
+    from test_queue import _assessment, _store as queue_store
+    from verda.agency.queue import work_queue
+    store = queue_store(tmp_path)
+    for listing in ('1000000101', '1000000102', '1000000103'):
+        _assessment(store, listing)
+        _thread_read(store, listing, True, 100.0)
+        _thread_read(store, listing, False, 200.0)
+    _thread_read(store, '1000000104', False, 200.0)                     # never found at all: not "lost"
+    _assessment(store, '1000000104')
+    quiet = {'next_action': {'action': 'none', 'why': 'waiting_for_seller'}, 'facts': {}, 'decision': {'state': 'research_required'}}
+    shut = {**quiet, 'decision': {'state': 'excluded'}}
+    status = lambda listing: shut if listing == '1000000103' else quiet
+    got = work_queue(store, {}, mode='local', status=status, now=10_000.0)
+    reads = [g for g in got['groups'] if g['action'] == 'sahibinden.read_thread']
+    assert reads and {i['listing_id'] for i in reads[0]['batch']} == {'1000000101', '1000000102'} and {i['why'] for i in reads[0]['batch']} == {'conversation_lost'}
+    _call(store, 'sahibinden.read_thread', {'listing_id': '1000000101'}, 'failed', 9_900.0)           # tried today: not again until tomorrow
+    again = work_queue(store, {}, mode='local', status=status, now=10_000.0)
+    assert [i['listing_id'] for g in again['groups'] for i in g['batch']] == ['1000000102']
+    later = work_queue(store, {}, mode='local', status=status, now=10_000.0 + 90_000)
+    assert {i['listing_id'] for g in later['groups'] for i in g['batch']} == {'1000000101', '1000000102'}
+
+
+def test_a_lost_conversation_is_not_listed_twice_when_a_question_is_also_waiting(tmp_path, monkeypatch):
+    from test_queue import _assessment, _store as queue_store
+    from verda.agency.queue import work_queue
+    store = queue_store(tmp_path)
+    _assessment(store, '1000000105')
+    _thread_read(store, '1000000105', True, 100.0)
+    _thread_read(store, '1000000105', False, 200.0)
+    ask = {'next_action': {'action': 'ask:sit', 'why': 'sit_status_unknown'}, 'facts': {}, 'decision': {'state': 'research_required'}}
+    monkeypatch.setattr('verda.agency.message.preview', lambda *a, **k: {'ok': False, 'reason': 'conversation_unconfirmed', 'message': 'x'})
+    monkeypatch.setattr('verda.agency.message.mode_of', lambda store: 'live')
+    got = work_queue(store, {}, mode='local', status=lambda listing: ask, now=10_000.0)
+    assert [(g['action'], g['waiting']) for g in got['groups']] == [('sahibinden.read_thread', 1)]
+
+
+# ---- set-aside work stays visible ---------------------------------------------------------------------------------------------------------------------
+def test_work_set_aside_after_repeated_failures_is_a_finding_until_something_succeeds(tmp_path):
+    from test_queue import _store as queue_store
+    store = queue_store(tmp_path)
+    now = 1_900_000_000.0
+    assert watchdog.stuck_work(store, 'local', now) == []
+    for k in range(3):
+        _call(store, 'sit.says', {'listing_id': '1000000106'}, 'failed', now - 3600 * (k + 1))
+    _call(store, 'sit.says', {'listing_id': '1000000107'}, 'failed', now - 3600)               # one failure is no pattern
+    row = {'row': {'title': 'Arsa ilanı', 'counterpart': 'Satıcı A', 'last_at_text': '21.10.2026 18:30'}}
+    for k in range(2):
+        _call(store, 'sahibinden.read_thread', row, 'failed', now - 7200 * (k + 1))
+    found = watchdog.stuck_work(store, 'local', now)[0]
+    assert found['rule'] == 'stuck_work' and found['listings'] == ['1000000106'] and found['count'] == 2 and 'sit.says' in found['detail']
+    _call(store, 'sahibinden.read_thread', row, 'complete', now - 600)                         # the row opened afterwards
+    _call(store, 'sit.says', {'listing_id': '1000000106'}, 'complete', now - 600)
+    assert watchdog.stuck_work(store, 'local', now) == []

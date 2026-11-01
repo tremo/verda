@@ -172,8 +172,19 @@ def work_queue(store, args, *, mode, status=None, now=None):
         skipped[reason] += 1
         skipped_ids[reason].append(listing)
     photo_candidates = []
+    from verda.agency.inbox import lost_conversations
+    lost, queued_reads = lost_conversations(store, mode), set()
     for listing in listings:
         current = status(listing)
+        # A conversation an earlier read opened and the latest read did not find is read again once a day, whatever the messages' mode: this used to run
+        # only on the way to a question, so with sending switched off four of them waited 18 days (14 Oct to 1 Nov 2026).
+        if listing in lost and listing not in busy and 'sahibinden' not in halted \
+                and (current.get('decision') or {}).get('state') in ('research_required', 'conditional', 'eligible'):
+            with store.transaction() as con:
+                tried = con.execute("SELECT 1 FROM tool_calls WHERE tool='sahibinden.read_thread' AND arguments LIKE ? AND started_at>? LIMIT 1", ('%' + listing + '%', now - DAY)).fetchone()
+            if not tried:
+                groups.setdefault('sahibinden.read_thread', []).append({'listing_id': listing, 'why': 'conversation_lost'})
+                queued_reads.add(listing)
         if (current.get('decision') or {}).get('state') in PHOTO_STATES and listing not in busy:
             photo_candidates.append(listing)
         seen_here = current.get('seen') or {}
@@ -252,7 +263,9 @@ def work_queue(store, args, *, mode, status=None, now=None):
                     skip('source_halted', listing)
                 elif verdict.get('reason') == 'conversation_unconfirmed':
                     # An earlier read opened this conversation, the latest did not: read it again; no question until it is found.
-                    if _stuck_read(store, listing, now, limit):
+                    if listing in queued_reads:
+                        pass                            # already handed out above
+                    elif _stuck_read(store, listing, now, limit):
                         skip('stuck', listing)
                     else:
                         groups.setdefault('sahibinden.read_thread', []).append({'listing_id': listing, 'why': 'conversation_missing'})
@@ -287,6 +300,11 @@ def work_queue(store, args, *, mode, status=None, now=None):
                 saved = con.execute('SELECT count(*) FROM evidence_assets WHERE listing_ref=? AND mode=?', (listing, mode)).fetchone()[0] if _has_assets(con) else 0
                 if min(listed, MAX_PHOTOS) > saved and not _stuck(con, 'listing.photos', listing, now, limit) and not _photos_exhausted(con, listing, now):
                     groups.setdefault('listing.photos', []).append({'listing_id': listing, 'why': 'photos_missing'})
+    for action_key, items in groups.items():              # one listing is handed out once per action, however many reasons asked for it
+        first = {}
+        for item in items:
+            first.setdefault(item['listing_id'], item)
+        groups[action_key] = list(first.values())
     out = [{'action': a, 'operator': OPERATOR[a], 'waiting': len(groups[a]), 'batch': groups[a][:1 if a in ONE_AT_A_TIME else 4 if a == 'tkgm.neighbors' else batch]} for a in ORDER if a in groups]
     return {'groups': out, 'skipped': skipped, 'skipped_ids': {k: v[:60] for k, v in skipped_ids.items() if k != 'no_action'}, 'waiting_total': sum(len(v) for v in groups.values()),
             'sender': {'mode': message.mode_of(store), 'refusals': sender_reasons}, 'advice': 'dispatch_batches' if out else 'nothing_to_do'}

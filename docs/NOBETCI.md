@@ -20,10 +20,11 @@ Nöbetçi (`agency/watchdog.py`) bu kuralları kayıtlardan kontrol eder. **Salt
 | `send_policy` | Canlı mesaj 08:30–21:00 dışında ya da bir öncekine `sender.gap_minutes`'tan yakın gitti | kritik |
 | `send_loop` | Bir ilana 24 saatte 4+ gönderim denemesi (tıklamadan duranlar dahil) | eylem |
 | `replies_waiting` | Bir satıcı cevabı 24 saattir ne olguya çevrildi ne işaretlendi | eylem |
-| `conversation_lost` | Daha önce okunmuş konuşma son okumada "bulunamadı" (aktif ilanlar) | eylem |
+| `conversation_lost` | Daha önce okunmuş konuşma son okumada "bulunamadı" (aktif ilanlar). İş kuyruğu bunu mesaj gönderimi açık olsun olmasın günde bir kez yeniden okutur (1 Kasım'a kadar yalnız soru gidecekken okutuyordu; gönderim kapalıyken dört konuşma 18 gün bekledi) | eylem |
 | `exclusion_doubt` | "En az alan" elemesi, ilanın kendi alanından %20+ farklı resmî alana dayanıyor | eylem |
 | `inbox_list_short` | Son 24 saatte "tam" işaretli bir gelen kutusu listesi, en uzununun %90'ından kısa | uyarı |
 | `step_loop` | Bir tarayıcı/resmî kaynak adımı aynı ilan ya da parsel için 24 saatte 8+ kez | eylem |
+| `stuck_work` | Bir adım aynı ilan için bugün `queue.stuck_after` kez başarısız oldu ya da bir gelen kutusu satırı iki kez; sistem bunları yarına bırakır, bu kural bırakıldıklarını gösterir. Sonradan başarılı olan sayılmaz | eylem |
 | `tool_failures` | Bir araç 24 saatte 10+ çağrının %20'sinden fazlasında başarısız | uyarı |
 | `scan_coverage` | 36 saattir arama sayfası okunmadı; haftalık tam tarama 8 gündür yok ya da son sayfaya ulaşmadı | uyarı |
 | `stale_listings` | Aktif ilan 8 gündür ne aramada ne ilan sayfasında görüldü | uyarı |

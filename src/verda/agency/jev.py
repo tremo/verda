@@ -272,10 +272,13 @@ def visible_browser(url):
 
 # Jev lists only HTML/ARIA controls. Sahibinden's account menu is plain spans whose click handler lives in script,
 # so before each observation those get an attribute-only role="link". Nothing is read, typed, or restyled.
+# An unread inbox card is long (title, unread count, name, a preview of the message, date: 351 and 395 characters on 1 Nov 2026). With a limit of
+# 300 those two were never offered as a click target, so the list was scrolled to them and the conversation never opened (`conversation_not_opened`).
+# The limit only keeps whole page containers out; the outermost-pointer rule below already picks one target per card.
 CLICKABLES = """(() => { let n=0; for (const e of document.querySelectorAll('body *')) {
   if (e.getAttribute('role') || e.closest('a,button,input,select,textarea,[role]')) continue;
   const t=(e.innerText||'').trim();
-  if (!t || t.length>300 || e.children.length>8) continue;
+  if (!t || t.length>1500 || e.children.length>8) continue;
   if (getComputedStyle(e).cursor!=='pointer') continue;
   if (e.parentElement && getComputedStyle(e.parentElement).cursor==='pointer') continue;   // outermost only: one row, one target
   e.setAttribute('role','link'); n++; } return n; })()"""

@@ -224,3 +224,12 @@ def test_notifications_can_be_switched_off(tmp_path, monkeypatch):
     monkeypatch.setenv('VERDA_NOTIFY', 'off')
     store = type('S', (), {'path': tmp_path / 'a.sqlite'})()
     assert notify.notify(store, [{'level': 'bad', 'text': 'x'}], 5e9, run=lambda *a, **k: (_ for _ in ()).throw(AssertionError('must not run'))) == []
+
+
+# ---- a long inbox card is a click target ----------------------------------------------------------------------------------------------------------
+def test_an_unread_inbox_card_with_a_long_preview_is_still_offered_as_a_click_target():
+    import re
+    from verda.agency import jev
+    limit = int(re.search(r't\.length>(\d+)', jev.CLICKABLES).group(1))
+    # the two unread cards of 1 Nov 2026 were 395 and 351 characters; with a limit of 300 neither could ever be opened
+    assert limit >= 1000

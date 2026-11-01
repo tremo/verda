@@ -41,5 +41,5 @@ Eşikler `watchdog.py`'nin başındadır. Kuralların her biri bir olaydan doğd
 
 ## Sınırlar
 
-- Bildirim telefona itilmez; Durum sayfası ve panel gösterir. Mac kapalıyken kontrol de yayın da durur.
+- Bildirim telefona itilmez; Durum sayfası ve panel gösterir. On dakikadan uzun süren kötü satırlar bu Mac'te yerel bildirim olur (`publish/notify.py`, `VERDA_NOTIFY=off` kapatır). Mac kapalıyken kontrol de yayın da durur.
 - Nöbetçi olan bir şeyi görür; gelecekteki bir hatayı önlemez. Önleme kapılardadır (`MESAJ-GONDERME.md`).

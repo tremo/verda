@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 from verda.agency.registry import ResourceBlocked, TransientToolError
+from verda.facts.service import main_lookup
 
 OSRM = 'https://router.project-osrm.org/route/v1/driving/{o};{d}?overview=false'
 VALHALLA = 'https://valhalla1.openstreetmap.de/route?json={json}'
@@ -116,9 +117,7 @@ def listing_route(store, args, *, mode, policy=None, fetch=get_json, sleep=time.
     policy = policy or Policy()
     listing = args['listing_id']
     with store.transaction() as con:
-        row = con.execute("SELECT payload FROM observations WHERE tool='tkgm.lookup' AND mode=? AND listing_ref=? ORDER BY captured_at DESC LIMIT 1",
-                          (mode, listing)).fetchone()
-    parcel = json.loads(row['payload']) if row else None
+        parcel = main_lookup(con, listing, mode)               # the listing's own parcel, not an extra deed of the same sale
     if not parcel or parcel.get('found') is not True:
         return {'listing_id': listing, 'engines': [], 'reason': 'official_parcel_required'}
     lon, lat = parcel['geometry']['centroid']

@@ -24,6 +24,12 @@ TILES = """(() => [...document.querySelectorAll('[data-identifier],li,div[role=l
 GOOGLE_STOPS = ('enter your password', 'şifrenizi girin', '2-step', '2 adımlı', 'verify it', 'doğrulama', 'not a robot', 'robot değilim', 'captcha',
                 'wants to access', 'erişmek istiyor', 'confirm your recovery', 'unusual activity', 'olağan dışı')
 SAHIBINDEN_STOPS = ('doğrulama kodu', 'robot olmadığınızı', 'captcha', 'güvenlik kodu')
+def _stopped(page, words):
+    """True when the page shows one of the words that need a person (captcha, verification). Folded, so a page in capitals still matches ("ROBOT OLMADIĞINIZI")."""
+    page = fold(page or '')
+    return any(fold(word) in page for word in words)
+
+
 ASSIST_REASONS = ('account_not_found', 'google_not_opened', 'login_not_confirmed', 'login_page_changed')   # where a model that can read the page may help
 MAX_FAILED_PER_6H = 3
 MIN_GAP = 600
@@ -164,8 +170,8 @@ def _relogin(hands, *, sleep=time.sleep, expected=None, assist=None):
         opened.append(gid)
         sleep(2)
         hands.switch_tab(gid)
-        page = (hands.text_of() or '').lower()
-        if any(word in page for word in GOOGLE_STOPS):
+        page = hands.text_of() or ''
+        if _stopped(page, GOOGLE_STOPS):
             return stop('needs_user', 'Google şifre, doğrulama ya da izin istiyor.')
         tiles = hands.js(TILES) or []
         mine = [t for t in tiles if fold(expected) in fold(t['text'])]
@@ -182,7 +188,7 @@ def _relogin(hands, *, sleep=time.sleep, expected=None, assist=None):
         if name and account_matches(name, expected):
             _close(hands, opened)
             return {'ok': True, 'reason': 'signed_in', 'detail': name}
-        if any(word in (hands.text_of() or '').lower() for word in SAHIBINDEN_STOPS):
+        if _stopped(hands.text_of(), SAHIBINDEN_STOPS):
             return stop('needs_user', 'Giriş sırasında ek doğrulama istendi.')
         return stop('login_not_confirmed', f'Başlıkta beklenen hesap görünmedi ({name or "ad yok"}).')
     except Exception as error:                      # a failed step never raises into the worker loop
@@ -240,8 +246,8 @@ def _assisted(hands, opened, expected, assist, sleep):
         google = next((t for t in hands.tabs() if 'accounts.google.com' in t.get('url', '')), None)
         target = _id(google) if google else opened[0]
         hands.switch_tab(target)
-        page = (hands.text_of() or '').lower()
-        if any(word in page for word in GOOGLE_STOPS + SAHIBINDEN_STOPS):
+        page = hands.text_of() or ''
+        if _stopped(page, GOOGLE_STOPS + SAHIBINDEN_STOPS):
             return None
         allow = lambda label: fold(expected) in fold(label) or fold(label).strip() in ALLOWED_EXTRA
         assist(target, allow)
@@ -403,8 +409,8 @@ def click_choice(hands, label, *, expected=None, sleep=time.sleep):
     if target is None:
         return {'ok': False, 'reason': 'no_login_tab', 'detail': 'Açık bir giriş sekmesi yok.'}
     hands.switch_tab(target)
-    page = (hands.text_of() or '').lower()
-    if any(word in page for word in GOOGLE_STOPS + SAHIBINDEN_STOPS):
+    page = hands.text_of() or ''
+    if _stopped(page, GOOGLE_STOPS + SAHIBINDEN_STOPS):
         return {'ok': False, 'reason': 'needs_user', 'detail': 'Ekran şifre, doğrulama ya da izin istiyor.'}
     matches = [c for c in (hands.js(CHOICES) or []) if fold(c['text'].split('\n')[0]) == wanted or (fold(expected) in wanted and fold(expected) in fold(c['text']))]
     if len({fold(c['text']) for c in matches}) != 1:

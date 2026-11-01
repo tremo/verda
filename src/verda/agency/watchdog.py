@@ -214,8 +214,10 @@ def scan_coverage(store, mode, now):
 
 def stale_listings(store, mode, now):
     """Every active listing is seen in a search or read again within a week: otherwise it may be sold, removed or repriced unseen."""
+    from verda.agency.research import legacy_excluded_ids
+    shut = legacy_excluded_ids(store, mode)                 # eliminated by the old system: nobody reads those again, so they are not "unseen"
     with store.transaction() as con:
-        active = {l for l, (state, _) in _latest_states(con, mode).items() if state in ACTIVE}
+        active = {l for l, (state, _) in _latest_states(con, mode).items() if state in ACTIVE} - shut
         removed = {r[0] for r in con.execute("SELECT DISTINCT listing_ref FROM observations WHERE mode=? AND tool='sahibinden.read_listing' AND payload LIKE '%\"unavailable\":true%'", (mode,))}
         seen = {r['listing_ref']: r['at'] for r in con.execute("SELECT listing_ref, max(captured_at) AS at FROM observations WHERE mode=? AND tool='sahibinden.read_listing' GROUP BY 1", (mode,))}
         for r in con.execute("SELECT captured_at, payload FROM observations WHERE mode=? AND tool='sahibinden.search' AND captured_at>?", (mode, now - STALE_DAYS * DAY)):

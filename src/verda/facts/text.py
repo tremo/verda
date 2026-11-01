@@ -17,8 +17,8 @@ MAX_QUOTE = 500    # raw characters
 _HEDGES = (
     'sanırım', 'sanıyorum', 'galiba', 'muhtemelen', 'herhalde', 'bilmiyorum', 'bilmiyoruz',
     'bilgim yok', 'emin değil', 'kesin değil', 'kesin bilmiyorum', 'diye biliyorum', 'diye duydum',
-    'duyduğum kadarıyla', 'araştırıp dön', 'araştıracağım', 'teyit edeceğim', 'teyit etmek lazım', 'sorabilirsiniz',     # not "teyit ettim": that is a confirmation 'sorarsanız', 'kontrol edin',
-    'kontrol ettirin', 'bakmak lazım', 'olabilir', 'olabiliyor', 'diyemem', 'ihtimal', 'tahmin',
+    'duyduğum kadarıyla', 'araştırıp dön', 'araştıracağım', 'teyit edeceğim', 'teyit etmek lazım',      # not "teyit ettim": that is a confirmation
+    'sorabilirsiniz', 'sorarsanız', 'kontrol edin', 'kontrol ettirin', 'bakmak lazım', 'olabilir', 'olabiliyor', 'diyemem', 'ihtimal', 'tahmin',
 )
 
 

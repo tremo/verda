@@ -168,6 +168,35 @@ def legacy_exclusion_reason(store, listing_id):
     return '; '.join(LEGACY_REASONS.get(p, p) for p in parts)[:400]
 
 
+def legacy_excluded_ids(store, mode='local'):
+    """Listings the old system eliminated and nothing since has reopened: what `fact_status` shows as excluded, for counts that cannot ask one by one.
+    An exclusion for price alone stops counting once the listing's own newest price is back under the limit."""
+    archive = archive_connection(store)
+    if not archive:
+        return set()
+    out, by_price = set(), set()
+    try:
+        snapshot = archive.execute('SELECT id FROM legacy_snapshots ORDER BY imported_at DESC LIMIT 1').fetchone()
+        if not snapshot:
+            return set()
+        for row in archive.execute("SELECT subject_id, payload FROM legacy_rows WHERE snapshot_id=? AND table_name='items'", (snapshot['id'],)):
+            item = json.loads(row['payload'])
+            if item.get('lifecycle') != 'excluded':
+                continue
+            reasons = [p.strip() for p in str(json.loads(item.get('legacy_json') or '{}').get('exclusion_reason') or '').split(';') if p.strip() and p.strip() != 'None']
+            (by_price if reasons == ['price_over_15m'] else out).add(row['subject_id'])
+    finally:
+        archive.close()
+    if by_price:
+        with store.transaction() as con:
+            for listing in by_price:
+                latest = con.execute("SELECT json_extract(facts,'$.price_tl') FROM assessments WHERE listing_ref=? AND mode=? ORDER BY seq DESC LIMIT 1", (listing, mode)).fetchone()
+                price = latest[0] if latest else None
+                if price is None or price > Policy().max_price_tl:
+                    out.add(listing)
+    return out
+
+
 def fact_status(store, listing_id, *, mode='local'):
     """Verified facts, the rule engine's decision and the next real action for one listing."""
     lifecycle = legacy_lifecycle(store, listing_id) if mode == 'local' else None

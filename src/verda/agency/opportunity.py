@@ -12,6 +12,7 @@ import re
 import statistics
 
 from verda.agency import comparables, score as base
+from verda.facts.text import fold
 
 WEIGHTS = {'opportunity': 0.45, 'purpose': 0.40, 'proximity': 0.15}
 PURPOSE = {'investment': 0.40, 'house': 0.20, 'production': 0.40}
@@ -27,6 +28,15 @@ OLIVE_FACTOR = 0.5                                              # zeytinlik: 357
 TREE_NORM = {'zeytin': 28, 'badem': 27, 'incir': 16, 'harnup': 21, 'keçiboynuzu': 21, 'ceviz': 10, 'nar': 40, 'kestane': 20, 'limon': 21, 'portakal': 27,
              'mandalin': 27, 'erik': 18, 'kayısı': 16, 'elma': 20, 'armut': 20, 'şeftali': 40, 'kiraz': 25, 'vişne': 18, 'dut': 20, 'avokado': 21}
 _TREES = '|'.join(sorted(TREE_NORM, key=len, reverse=True))
+_TREE_KEY = {fold(tree): tree for tree in TREE_NORM}
+_THOUSANDS = re.compile(r'\d{1,3}(?:\.\d{3})+')
+
+
+def _thousands(number):
+    """A tree count as written: "1.500" is fifteen hundred, "300" is 300; "15.20" is no count at all and is left out rather than read as 1520."""
+    if number.isdigit():
+        return int(number)
+    return int(number.replace('.', '')) if _THOUSANDS.fullmatch(number) else None
 _COUNT = re.compile(r'(\d[\d\.]*)\s*(?:adet|tane|ağaç)?\s*(?:yaşlı|yetişkin|meyveli|asırlık|verimli|aşılı)?\s*(' + _TREES + r')\w*', re.I)
 LAND = ('Tarla', 'Zeytinlik', 'Bademlik')
 BUILDING_HINT = re.compile(r'(yapı izni|yapı yapıl|ev yapıl|ev yapı|çiftlik evi|bağ evi|tarımsal yapı|yapılaşma|konut izn|imar izni|il tarım)', re.I)
@@ -97,9 +107,10 @@ def tree_density(text, area):
     """Stated trees against the Ek-4 minimums: 1.0 = exactly the minimum density; None when the text names no counts or the area is unknown."""
     counts = {}
     for m in _COUNT.finditer(re.sub(r'\s+', ' ', text or '')):
-        digits = m.group(1).replace('.', '')
-        if digits.isdigit() and int(digits) < 5000:
-            counts[m.group(2).lower()] = max(counts.get(m.group(2).lower(), 0), int(digits))
+        tree = _TREE_KEY.get(fold(m.group(2)))                     # "ZEYTİN" and "zeytin" are one tree
+        digits = _thousands(m.group(1))
+        if tree and digits is not None and digits < 5000:
+            counts[tree] = max(counts.get(tree, 0), digits)
     return sum(n / (TREE_NORM[t] * area / 1000) for t, n in counts.items()) if counts and area else None
 
 
@@ -157,8 +168,14 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     if fair is None:
         purpose, parts = purpose_fit(kind, area or 0, road, text, sit_known)
         base_score = WEIGHTS['opportunity'] * 50 + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * near     # no price judgement: the middle
-        return {'score': min(49, round(base_score)), 'opportunity': None, 'purpose': purpose, 'proximity': near, 'label': 'Belirsiz', 'road': road,
-                'fair_unit_price': None, 'gap_pct': None, 'caps': [], 'parts': parts, 'basis': basis}
+        score, caps = min(49, round(base_score)), []
+        taken = sum((row.get('penalties') or {}).values())            # the rule engine's point cuts (second-degree sit, easement) count with or without a price judgement
+        if taken:
+            score, caps = max(0, score - taken), caps + [f'kural cezaları −{taken}']
+        if road == ENCLOSED:
+            score, caps = max(0, score - ROAD_QUESTION_PENALTY), caps + ['yol: geçiş hakkı sorusu bekliyor −40']
+        return {'score': score, 'opportunity': None, 'purpose': purpose, 'proximity': near, 'label': 'Belirsiz', 'road': road,
+                'fair_unit_price': None, 'gap_pct': None, 'caps': caps, 'parts': parts, 'basis': basis}
     rate = price / area
     gap_ln = math.log(fair / rate)
     purpose, parts = purpose_fit(kind, area, road, text, sit_known, hood_effect)

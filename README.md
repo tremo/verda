@@ -1,6 +1,6 @@
 # Verda v2
 
-Mac üzerinde çalışan, kalıcı görev kuyrukları olan agent çatısı. Mevcut GitHub Pages arayüzü korunur. Genel agent döngüsü çalışır; canlı emlak araştırması için kaynak adaptörleri ve mesaj politikası henüz tamamlanmamıştır.
+Mac üzerinde çalışan, kalıcı görev kuyrukları olan agent çatısı. Mevcut GitHub Pages arayüzü korunur. Agent döngüsü, Sahibinden / TKGM / rota / sit kaynak adaptörleri, olgu katmanı, mesaj politikası (gönderim kapalı, deneme ya da canlı), nöbetçi ve pano yayını çalışır. Hangi parçanın nerede çalıştığı için önce [docs/PROJE-GENEL-BAKIS.md](docs/PROJE-GENEL-BAKIS.md).
 
 Kod deposu: [tremo/verda](https://github.com/tremo/verda). Gerçek ilan verileri, satıcı yazışmaları, yerel raporlar ve erişim anahtarları bu depoya dahil değildir.
 
@@ -17,7 +17,7 @@ Bu sürüm:
 - Dokuz adımlı örnek araştırmayı sentetik verilerle baştan sona çalıştırır. Gerçek kaynak bağlantıları eksikse işi açık bir nedenle bekletir.
 - Model gerektiren adımları agent bazında seçilen sağlayıcıya yönlendirir. İlk çalışan sağlayıcı Codex CLI’dir; kural hesapları ve kaynak adaptörleri model çağırmaz.
 
-Dashboard adaptörü şimdilik **mevcut üretilmiş görünümü taşıma** katmanıdır. Yeni agent sonuçlarından tam dashboard üretimi, Firestore senkronizasyonu ve canlı yayın henüz uygulanmadı. `sourceUpdatedAt` güncelliğini yeniden kanıtladığı iddia edilmez. Aktarılan tarihçe de yeniden doğrulanmış kanıt sayılmaz.
+Dashboard adaptörü eski, dondurulmuş görünümü taşır; yeni sonuçları yayıncı (`verda agency-publish-firestore`, `com.verda.publisher`) beş dakikada bir özel Firestore'a `v2Listings/*` olarak yazar ve GitHub Pages'teki arayüz bunu eski görünümün üstüne bindirir (`docs/PROJE-GENEL-BAKIS.md`). `sourceUpdatedAt` güncelliğini yeniden kanıtladığı iddia edilmez. Aktarılan tarihçe de yeniden doğrulanmış kanıt sayılmaz.
 
 ## Yerel çalıştırma
 

@@ -48,13 +48,14 @@ def build(store, *, mode='local', now=None, running=None, problems=()):
     """`problems`: what the caller could not compute this time (shown first, never dropped)."""
     from verda.agency import message
     from verda.agency.queue import work_queue
+    from verda.agency.research import legacy_excluded_ids
     now = time.time() if now is None else now
     since = midnight(now)
     running = services() if running is None else running
     with store.transaction() as con:
         message.ensure(con)
-        states = dict(con.execute("SELECT a.state, count(*) FROM assessments a JOIN (SELECT listing_ref, max(created_at) m FROM assessments WHERE mode=? GROUP BY 1) x "
-                                  "ON a.listing_ref=x.listing_ref AND a.created_at=x.m WHERE a.mode=? GROUP BY 1", (mode, mode)).fetchall())
+        latest = con.execute("SELECT a.listing_ref, a.state FROM assessments a JOIN (SELECT listing_ref, max(seq) m FROM assessments WHERE mode=? GROUP BY 1) x "
+                             "ON a.listing_ref=x.listing_ref AND a.seq=x.m WHERE a.mode=?", (mode, mode)).fetchall()
         today = [dict(r) for r in con.execute("SELECT tool, state, count(*) n FROM tool_calls WHERE started_at>=? GROUP BY 1,2", (since,))]
         sent = [dict(r) for r in con.execute("SELECT listing_ref, sent_at FROM outbox WHERE mode!='dry_run' AND state='confirmed' AND sent_at>=? ORDER BY sent_at DESC", (since,))]
         last_sent = con.execute("SELECT max(sent_at) FROM outbox WHERE mode!='dry_run' AND state='confirmed'").fetchone()[0]
@@ -73,6 +74,11 @@ def build(store, *, mode='local', now=None, running=None, problems=()):
                 recent.append({'at': r['resolved_at'], 'kind': 'recovered', 'text': f"Kaynak yeniden açıldı: {r['resource']}"})
         for r in con.execute("SELECT started_at FROM tool_calls WHERE tool='network.reset_modem' ORDER BY started_at DESC LIMIT 3"):
             recent.append({'at': r['started_at'], 'kind': 'modem', 'text': 'Modem yeniden başlatıldı'})
+    shut = legacy_excluded_ids(store, mode) if mode == 'local' else set()       # the old system's eliminations are "Elendi" here, as on the dashboard
+    states = {}
+    for listing, state in latest:
+        key = 'excluded' if listing in shut else state
+        states[key] = states.get(key, 0) + 1
     queue = work_queue(store, {}, mode=mode)
     waiting = [{'action': g['action'], 'label': ACTION_LABEL.get(g['action'], g['action']), 'waiting': g['waiting']} for g in queue['groups']]
     refusals = [{'reason': k, 'label': SENDER_REFUSAL.get(k, k), 'count': v} for k, v in (queue.get('sender', {}).get('refusals') or {}).items()]

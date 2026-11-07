@@ -15,6 +15,7 @@ OPERATOR = {'sahibinden.read_listing': 'sahibinden', 'sahibinden.read_thread': '
             'tkgm.lookup': 'parcel', 'tkgm.corridor': 'parcel', 'tkgm.neighbors': 'parcel', 'sit.says': 'parcel', 'geo.route': 'research', 'listing.photos': 'sahibinden'}
 ORDER = ['tkgm.lookup', 'sit.says', 'tkgm.corridor', 'tkgm.neighbors', 'geo.route', 'sahibinden.read_thread', 'sahibinden.read_listing', 'sahibinden.send_message', 'listing.photos']   # photos last: they never crowd out a message
 RESOURCE_OF = {'tkgm.lookup': 'tkgm', 'tkgm.corridor': 'tkgm', 'tkgm.neighbors': 'tkgm', 'sit.says': 'says', 'geo.route': 'geography', 'sahibinden.read_listing': 'sahibinden', 'sahibinden.read_thread': 'sahibinden', 'sahibinden.send_message': 'sahibinden'}
+ALONGSIDE_ASKS = ('geo.route',)                       # steps that need nobody's answer and no browser: handed out even while a question waits
 ONE_AT_A_TIME = ('sahibinden.send_message',)           # a message is its own task: one listing, one message
 TERMINAL = ('complete', 'failed', 'done')
 DAY = 86400
@@ -247,6 +248,14 @@ def work_queue(store, args, *, mode, status=None, now=None):
                     continue
             groups.setdefault(action, []).append(item)
         elif action.startswith('ask:'):
+            # The rule engine names one next step per listing; the rest it lists as `also`. A question that cannot go (sending off, the official sit layer asked first)
+            # must not hold back what needs nobody's answer: 63 listings waited a week with no Mertur distance for this reason.
+            for other in current['next_action'].get('also') or []:
+                if other in ALONGSIDE_ASKS and listing not in busy and RESOURCE_OF.get(other) not in halted:
+                    with store.transaction() as con:
+                        blocked = _stuck(con, other, listing, now, limit)
+                    if not blocked:
+                        groups.setdefault(other, []).append({'listing_id': listing, 'why': 'asked_alongside_a_question'})
             if says_due and not says_stuck:
                 skip('waits_for_says', listing)         # the official sit layer is asked first
             elif not sender_on:

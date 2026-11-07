@@ -393,3 +393,20 @@ def test_a_route_is_asked_again_from_the_corrected_parcel_not_the_old_one(tmp_pa
         assert corridor.listing_corridor(store, {'listing_id': 'L1'}, mode='local')['reason'] == 'official_parcel_with_geometry_required'
     finally:
         research.fact_status = real_status
+
+
+# ---- a waiting question does not hold back the route -------------------------------------------------------------------------------------------------
+def test_the_route_is_handed_out_while_the_question_beside_it_waits_for_the_sender(tmp_path, monkeypatch):
+    from test_queue import _assessment, _store as queue_store
+    monkeypatch.setattr('verda.agency.message.mode_of', lambda store: 'off')
+    from verda.agency.queue import work_queue
+    store = queue_store(tmp_path)
+    _assessment(store, '1000000201')
+    waiting = {'next_action': {'action': 'ask:sit', 'why': 'sit_status_unknown', 'also': ['geo.route', 'sahibinden.read_listing']}, 'facts': {}, 'decision': {'state': 'research_required'}}
+    got = work_queue(store, {}, mode='local', status=lambda listing: waiting, now=10_000.0)
+    assert [(g['action'], [i['listing_id'] for i in g['batch']]) for g in got['groups']] == [('geo.route', ['1000000201'])]     # the browser step stays out
+    assert got['skipped']['waits_for_sender'] == 1                                                                                   # the question still waits
+    _call(store, 'geo.route', {'listing_id': '1000000201'}, 'failed', 9_000.0)
+    for k in range(3):
+        _call(store, 'geo.route', {'listing_id': '1000000201'}, 'failed', 9_000.0 + k)
+    assert work_queue(store, {}, mode='local', status=lambda listing: waiting, now=10_000.0)['groups'] == []                         # a route that keeps failing is set aside

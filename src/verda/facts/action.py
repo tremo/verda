@@ -38,6 +38,10 @@ def next_action(decision: Decision | None, assembled, seen: dict, review_open: i
     if not seen.get('listing_read'):
         return _act('sahibinden.read_listing', 'listing_detail_not_read')
     if assembled is not None and 'parcel_key' not in assembled.values and not assembled.parcels:
+        # "Ada: Belirtilmemiş" with a parsel no: the official record is tried under ada 0, then 1, before a seller is asked what the listing already says.
+        # One lookup per listing: when it found nothing that matches the advertised area, the seller is asked as before.
+        if seen.get('ada_unstated_parsel') and not seen.get('tkgm_looked_up') and assembled.values.get('sale_area_m2'):
+            return _act('tkgm.lookup', 'ada_not_stated_try_0_then_1', parsel_no=seen['ada_unstated_parsel'])
         return _act('ask:parcel_identity', 'parcel_identity_missing')
 
     missing = [r for r in (decision.reasons if decision else []) if decision.state == 'research_required']

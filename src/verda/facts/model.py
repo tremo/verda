@@ -46,6 +46,16 @@ FIELDS: dict[str, FieldSpec] = {
 }
 MAX_SALE_PARCELS = 8
 
+# A listing in a village without blocks says "Ada No: Belirtilmemiş" and gives only a parsel no. The ada is then guessed, 0 first and 1 if that
+# is not it (user decision, 8 Nov 2026), and a guess is believed only when the official area is the advertised one: the same parsel number
+# exists under other adas as other land. Sahibinden prints whole m² and TKGM keeps decimals ("5.127" against "5.127,77" is the same land).
+ADA_GUESSES = ('0', '1')
+ADA_GUESS_AREA_TOLERANCE_M2 = 1.0
+
+
+def area_matches(official, advertised) -> bool:
+    return type(official) in (int, float) and type(advertised) in (int, float) and abs(official - advertised) <= ADA_GUESS_AREA_TOLERANCE_M2
+
 # Grade follows the source of the observation, never the proposer.
 TOOL_GRADE = {SEARCH: 'rapor', LISTING: 'beyan', THREAD: 'beyan',
               'tkgm.lookup': 'resmi', SAYS: 'resmi', 'tkgm.corridor': 'bagimsiz', 'tkgm.neighbors': 'bagimsiz', 'geo.route': 'bagimsiz', 'geo.elevation': 'bagimsiz'}

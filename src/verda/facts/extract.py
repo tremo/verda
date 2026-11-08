@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from verda.facts.model import LISTING, PARCEL, SEARCH, Proposal
+from verda.facts.model import LISTING, PARCEL, SEARCH, Proposal, area_matches
 from verda.facts.text import fold
 
 TKGM = 'tkgm.lookup'
@@ -14,7 +14,15 @@ NEIGHBORS = 'tkgm.neighbors'
 SAYS = 'sit.says'
 EXTRACTORS = frozenset({LISTING, SEARCH, TKGM, ROUTE, CORRIDOR, NEIGHBORS, SAYS})
 SAYS_VALUE = {'none': 'none', 'first': 'first_degree', 'second': 'second_degree', 'third': 'third_degree'}
-_ADA_PARSEL = re.compile(r'^\s*(\d+)\s*/\s*(\d+)\s*$')
+_COUNT = r'(\d{1,3}(?:\.\d{3})+|\d+)'                  # Sahibinden prints 1757 as "1.757"
+_ADA_PARSEL = re.compile(rf'^\s*{_COUNT}\s*/\s*{_COUNT}\s*$')
+_PLAIN_COUNT = re.compile(rf'^\s*{_COUNT}\s*$')
+ADA_NOT_STATED = fold('Belirtilmemiş')
+
+
+def _count(text) -> int | None:
+    match = _PLAIN_COUNT.match(text) if isinstance(text, str) else None
+    return int(match[1].replace('.', '')) if match else None
 
 
 def _number(value):
@@ -50,8 +58,19 @@ def parcel_from_listing(payload: dict) -> str | None:
     match = _ADA_PARSEL.match(raw) if isinstance(raw, str) else None
     if not match:
         return None
-    key = f'{int(match[1])}/{int(match[2])}'
+    key = f"{int(match[1].replace('.', ''))}/{int(match[2].replace('.', ''))}"
     return key if PARCEL.match(key) else None      # 0/0 and friends are placeholders
+
+
+def ada_unstated_parsel(payload: dict) -> str | None:
+    """The parsel no of a listing whose ada says "Belirtilmemiş" ("778", "1.757" -> "778", "1757"); None when the ada is given, the label is missing
+    or there is no usable parsel no. The ada is then not a fact but a guess (facts.model.ADA_GUESSES), checked against the official area."""
+    attributes = payload.get('attributes') or {}
+    ada = attributes.get('ada no')
+    if not isinstance(ada, str) or fold(ada) != ADA_NOT_STATED:
+        return None
+    number = _count(attributes.get('parsel no'))
+    return str(number) if number and PARCEL.match(f'0/{number}') else None
 
 
 def extract(tool: str, observation_id: str, mode: str, payload: Any, listing_ref: str | None = None,
@@ -87,6 +106,8 @@ def extract(tool: str, observation_id: str, mode: str, payload: Any, listing_ref
     if tool == TKGM:
         if payload.get('found') is not True or not listing_ref or not _number(payload.get('official_area_m2')):
             return []
+        if payload.get('ada_guess') and not area_matches(payload['official_area_m2'], listing_area):
+            return []                          # a guessed ada is believed only on the advertised area, whatever the tool that asked thought of it
         common = dict(listing_ref=listing_ref, proposer='code:tkgm_record@1', mode=mode, observation_id=observation_id)
         key = payload.get('parcel_key') if isinstance(payload.get('parcel_key'), str) and PARCEL.match(payload['parcel_key']) else None
         # Every looked-up parcel's own area, keyed by the parcel: a several-deed sale adds them up (facts.assemble).

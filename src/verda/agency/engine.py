@@ -259,6 +259,19 @@ def default_registry(config, store=None):
     handlers = {'policy.screen': screen} if 'policy.screen' in allowed else {}
     if 'tkgm.lookup' in allowed:
         from verda.agency.tkgm import TkgmClient
-        handlers['tkgm.lookup'] = TkgmClient(store.path.with_suffix('.tkgm-admin.json') if store else None).lookup
+        client = TkgmClient(store.path.with_suffix('.tkgm-admin.json') if store else None)
+        handlers['tkgm.lookup'] = client.lookup
+        if store:
+            def tkgm_lookup(args, context):
+                if 'parsel_no' not in args:
+                    return client.lookup(args)
+                # No ada on the listing: the advertised area decides which ada is believed. It is read from the facts here, never taken from the model's arguments.
+                from verda.facts.service import FactService
+                with store.transaction() as con:
+                    area = FactService.advertised_area(con, args['listing_id'], context['mode'])
+                if area is None:
+                    raise ValueError('advertised_area_unknown')
+                return client.lookup_ada_unstated(args, area)
+            contextual['tkgm.lookup'] = tkgm_lookup
     return Registry(config, handlers,
                     {k: v for k, v in contextual.items() if k in allowed})

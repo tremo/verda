@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from verda.facts.action import OFFICIALLY_CHECKABLE, UNVERIFIED_GRADES, next_action
 from verda.facts.assemble import assemble
-from verda.facts.extract import EXTRACTORS, extract
+from verda.facts.extract import EXTRACTORS, ada_unstated_parsel, extract
 from verda.facts.model import FIELDS, LISTING, SEARCH, THREAD, TOOL_GRADE, Proposal, Verdict, accept, reject
 from verda.facts.verify import VERIFIER, source_kind, verify
 from verda.legacy import canonical, digest
@@ -164,6 +164,24 @@ class FactService:
         return result
 
     # ---- extraction hook ------------------------------------------------------------------
+    @staticmethod
+    def advertised_area(con, listing_ref, mode):
+        """The area the listing (or the search row) states, never an official one: what an official record is compared with. None when there is none."""
+        row = con.execute("""SELECT value FROM claims WHERE listing_ref=? AND mode=? AND field='sale_area_m2'
+            AND status='accepted' AND grade!='resmi' ORDER BY seq DESC LIMIT 1""", (listing_ref, mode)).fetchone()
+        return json.loads(row['value']) if row else None
+
+    @staticmethod
+    def ada_unstated_parsel(con, listing_ref, mode):
+        """The parsel no of the newest listing read when its ada says "Belirtilmemiş" (see extract.ada_unstated_parsel); None otherwise."""
+        row = con.execute('SELECT payload FROM observations WHERE listing_ref=? AND mode=? AND tool=? ORDER BY captured_at DESC, id DESC LIMIT 1',
+                          (listing_ref, mode, LISTING)).fetchone()
+        try:
+            payload = json.loads(row['payload']) if row else None
+        except ValueError:
+            return None
+        return ada_unstated_parsel(payload) if isinstance(payload, dict) else None
+
     def on_observation(self, con, task, tool, observation_id, now, event) -> None:
         """Runs in the transaction that records the observation. A failure here never
         loses the observation: the savepoint is rolled back and an event says why."""
@@ -172,10 +190,8 @@ class FactService:
         observation = self.observation(con, observation_id)
         con.execute('SAVEPOINT facts_extract')
         try:
-            area = con.execute("""SELECT value FROM claims WHERE listing_ref=? AND mode=? AND field='sale_area_m2'
-                AND status='accepted' AND grade!='resmi' ORDER BY seq DESC LIMIT 1""", (observation['listing_ref'], task['mode'])).fetchone()
             proposals = extract(tool.key, observation_id, task['mode'], observation['payload'], observation['listing_ref'],
-                                json.loads(area['value']) if area else None)
+                                self.advertised_area(con, observation['listing_ref'], task['mode']))
             counts = {'accepted': 0, 'rejected': 0, 'needs_review': 0, 'duplicate': 0}
             touched = set()
             for p in proposals:
@@ -210,9 +226,7 @@ class FactService:
         for row in con.execute(f'SELECT id,tool,listing_ref,payload FROM observations WHERE mode=? AND tool IN ({marks}) ORDER BY captured_at,id',
                                (mode, *sorted(EXTRACTORS))).fetchall():
             counts['observations'] += 1
-            area = con.execute("""SELECT value FROM claims WHERE listing_ref=? AND mode=? AND field='sale_area_m2'
-                AND status='accepted' AND grade!='resmi' ORDER BY seq DESC LIMIT 1""", (row['listing_ref'], mode)).fetchone()
-            for p in extract(row['tool'], row['id'], mode, json.loads(row['payload']), row['listing_ref'], json.loads(area['value']) if area else None):
+            for p in extract(row['tool'], row['id'], mode, json.loads(row['payload']), row['listing_ref'], self.advertised_area(con, row['listing_ref'], mode)):
                 result = self.submit(con, p, now=now)
                 counts['duplicate' if result['duplicate'] else result['status']] += 1
                 if result['status'] == 'accepted' and not result['duplicate']:
@@ -312,6 +326,8 @@ class FactService:
             decision = Decision(state='excluded', policy_version=policy.version, reasons=['legacy_excluded'] + (decision.reasons if decision and decision.state == 'excluded' else []),
                                 conditions=[], penalties={})
         seen = self.seen(con, listing_ref, mode, assembled.parcels)
+        if seen['listing_read'] and 'parcel_key' not in assembled.values and not assembled.parcels:
+            seen['ada_unstated_parsel'] = self.ada_unstated_parsel(con, listing_ref, mode)       # a parsel no without an ada: tried at TKGM before the seller is asked
         if len(assembled.parcels) > 1:
             seen['corridor_enclosed'] = False   # the main parcel may reach the road through another deed of the same sale: not conclusive
         review = self.review_items(con, listing_ref, mode)

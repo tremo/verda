@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 from verda.agency.registry import ResourceBlocked, TransientToolError
+from verda.facts.model import ADA_GUESSES, area_matches
 
 BASE = 'https://cbsapi.tkgm.gov.tr/megsiswebapi.v3.1/api'
 RATE_CODES = {403, 429}
@@ -143,6 +144,24 @@ class TkgmClient:
             tmp.write_text(json.dumps(cache, ensure_ascii=False))
             os.replace(tmp, self.cache_path)
         return ident
+
+    def lookup_ada_unstated(self, args: dict, advertised_area) -> dict:
+        """A listing that gives a parsel no and no ada ("Belirtilmemiş"): ada 0 is asked first and ada 1 only if 0 is not it. A guess is accepted only when
+        the official area is the advertised one, because the same parsel number exists under other adas as other land (facts.model.ADA_GUESSES).
+        The answer is the matching lookup, marked `ada_guess` (the fact layer checks the area again), or a not-found record that lists what was tried."""
+        neighborhood = clean_neighborhood(args['neighborhood'])
+        parsel_no = str(int(args['parsel_no']))
+        tried = []
+        for index, ada in enumerate(ADA_GUESSES):
+            if index:
+                self.sleep(self.delay)
+            found = self.lookup({'neighborhood': neighborhood, 'parcel_key': f'{ada}/{parsel_no}'})
+            tried.append({'parcel_key': found['parcel_key'], 'found': found['found'],
+                          **({'official_area_m2': found['official_area_m2']} if found['found'] else {})})
+            if found['found'] and area_matches(found['official_area_m2'], advertised_area):
+                return {**found, 'ada_guess': {'parsel_no': parsel_no, 'advertised_area_m2': advertised_area, 'tried': tried}}
+        return {'found': False, 'parcel_key': None, 'neighborhood': neighborhood, 'observed_at': time.time(),
+                'ada_guess': {'parsel_no': parsel_no, 'advertised_area_m2': advertised_area, 'tried': tried}}
 
     def lookup(self, args: dict) -> dict:
         neighborhood = clean_neighborhood(args['neighborhood'])

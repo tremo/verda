@@ -223,11 +223,12 @@ def work_queue(store, args, *, mode, status=None, now=None):
                     skip('no_listing_url', listing)
                     continue
             if action == 'tkgm.lookup':
-                parcel = current['next_action'].get('parcel') or ((current.get('facts') or {}).get('parcel_key') or {}).get('value')
+                parsel_no = current['next_action'].get('parsel_no')       # "Ada: Belirtilmemiş": the tool tries ada 0, then 1, against the advertised area
+                parcel = None if parsel_no else current['next_action'].get('parcel') or ((current.get('facts') or {}).get('parcel_key') or {}).get('value')
                 if current['next_action'].get('part'):
                     item['part'] = True                 # one more deed of the same sale: its own area only
                 hood = neighborhood_of(store, listing)
-                if parcel and not hood:
+                if (parcel or parsel_no) and not hood:
                     # The page named no place (or was read by an older reader): read it again, at most twice a day.
                     with store.transaction() as con:
                         reads = con.execute("SELECT count(*) FROM observations WHERE listing_ref=? AND tool='sahibinden.read_listing' AND mode=? AND captured_at>?", (listing, mode, now - DAY)).fetchone()[0]
@@ -237,11 +238,15 @@ def work_queue(store, args, *, mode, status=None, now=None):
                     else:
                         skip('needs_neighborhood', listing)
                     continue
-                if not parcel:
+                if not (parcel or parsel_no):
                     skip('needs_neighborhood', listing)
                     continue
-                item.update(parcel_key=parcel, neighborhood=hood)
-                needle = parcel
+                if parsel_no:
+                    item.update(parsel_no=parsel_no, neighborhood=hood)
+                    needle = listing                    # the call's arguments carry the listing; the parsel no alone would match other listings' failures
+                else:
+                    item.update(parcel_key=parcel, neighborhood=hood)
+                    needle = parcel
             with store.transaction() as con:
                 if _stuck(con, action, needle, now, limit):
                     skip('stuck', listing)

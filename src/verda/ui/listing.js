@@ -71,13 +71,13 @@
     const price = first('price_tl'), areaV = first('sale_area_m2'), minutes = claimsOf(facts, 'route_minutes').map(c => c.value).filter(v => typeof v === 'number');
     const tiles = el('div', null, 'tiles', app);
     const tile = (label, value, sub, cls) => { const t = el('div', null, 'tile', tiles); el('span', label, null, t); const b = el('b', value, cls || null, t); el('small', sub || '', null, t); return {t, b, sub: t.querySelector('small')}; };
-    const tScore = tile('Puan', '…', '');
+    const tScore = tile('Fırsat puanı', '…', '');
     tile('Fiyat', price == null ? '—' : money(price), price == null ? '' : price.toLocaleString('tr-TR') + ' ₺').b.title = price == null ? '' : price.toLocaleString('tr-TR') + ' ₺';
     tile('Alan', areaV == null ? '—' : num(areaV) + ' m²', claimsOf(facts, 'sale_area_m2')[0] ? (GRADE[claimsOf(facts, 'sale_area_m2')[0].grade] || [''])[0] : '');
     const tUnit = tile('₺/m²', price && areaV ? num(price / areaV) : '—', 'satış alanına göre');
     const rng = minutes.length ? (Math.min(...minutes) === Math.max(...minutes) ? dec(Math.max(...minutes)) : dec(Math.min(...minutes)) + '–' + dec(Math.max(...minutes))) + ' dk' : '—';
     const km = (d.route?.engines || []).filter(e => e.ok).map(e => e.km); const tRoute = tile('Mertur', rng, km.length ? dec(Math.max(...km)) + ' km' + (d.route?.engines?.length > 1 ? ' · ' + d.route.engines.length + ' motor' : '') : (d.route?.reason ? 'hesaplanamadı' : ''));
-    const tCmp = tile('Emsal', '…', '');
+    const tCmp = tile('Adil fiyata göre', '…', '');
 
     // verdict, once
     const vb = el('section', null, 'verdict-bar', app);
@@ -264,14 +264,15 @@
     fetchJson('/control/private/ranking?limit=200').then(r => {
       const row = r.ranked.find(x => x.listing_id === id);
       if (!row) { tScore.b.textContent = '—'; tScore.b.className = 'dim'; tScore.sub.textContent = st.decision?.state === 'excluded' ? 'sıralama dışı' : ''; tCmp.b.textContent = '—'; return; }
-      tScore.b.textContent = String(row.score); tScore.b.className = row.score >= 75 ? 'hi' : '';
-      tScore.sub.textContent = row.provisional ? 'geçici · doğrulama eksik' : 'fiyat + Mertur';
+      tScore.b.textContent = String(row.score); tScore.b.className = row.score >= 65 ? 'hi' : '';
+      tScore.sub.textContent = row.provisional ? 'geçici · doğrulama eksik' : 'fırsat puanı' + (row.parts ? ' · fiyat ' + (row.parts.opportunity ?? '—') + ' · amaç ' + row.parts.purpose + ' · Mertur ' + row.parts.proximity : '');
       if (!whereEl.dataset.set && !where && row.neighborhood) whereEl.textContent = [row.neighborhood, row.type].filter(Boolean).join(' · ');
-      if (row.discount_pct == null) { tCmp.b.textContent = 'emsal yok'; tCmp.b.className = 'dim'; tCmp.sub.textContent = 'puan en çok 49'; return; }
-      const dp = row.discount_pct; tCmp.b.textContent = Math.abs(dp) < 5 ? 'emsale yakın' : dp > 0 ? '%' + dec(dp) + ' ucuz' : '%' + dec(-dp) + ' pahalı';
-      tCmp.b.className = dp >= 5 ? 'hi' : dp <= -5 ? 'bad' : '';
-      tCmp.sub.textContent = [row.benchmark_scope, row.comparables + ' emsal', row.confidence ? row.confidence + ' güven' : null].filter(Boolean).join(' · ');
-      if (row.benchmark_unit_price) tUnit.sub.textContent = 'emsal ' + num(row.benchmark_unit_price) + ' ₺/m²';
+      // the dashboard's own judgement: the gap to the fair price, and what that fair price rests on
+      if (row.gap_pct == null) { tCmp.b.textContent = 'adil fiyat yok'; tCmp.b.className = 'dim'; tCmp.sub.textContent = row.fair_note || 'puan en çok 49'; return; }
+      const dp = row.gap_pct; tCmp.b.textContent = (row.label || 'Adil fiyat') + ' ' + (dp >= 0 ? '+' : '−') + '%' + dec(Math.abs(dp));
+      tCmp.b.className = ['Güçlü fırsat', 'Olası fırsat'].includes(row.label) ? 'hi' : ['Pahalı', 'Adilin üstünde'].includes(row.label) ? 'bad' : '';
+      tCmp.sub.textContent = [row.fair_tier === 'local' ? 'mahallede ' + row.fair_n + ' emsal' : 'bölgesel tahmin', ...(row.caps || [])].join(' · ');
+      if (row.fair_unit_price) tUnit.sub.textContent = 'adil ' + num(row.fair_unit_price) + ' ₺/m²';
     }).catch(() => { tScore.b.textContent = '—'; tCmp.b.textContent = '—'; });
   }).catch(e => { app.textContent = ''; el('p', e.message, 'bad', el('section', null, null, app)); });
 })();

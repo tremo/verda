@@ -245,7 +245,7 @@ def default_registry(config, store=None):
             'tkgm.neighbors': lambda args, context: __import__('verda.agency.corridor', fromlist=['x']).neighbor_types(store, args, mode=context['mode']),
             'tkgm.corridor': lambda args, context: __import__('verda.agency.corridor', fromlist=['x']).listing_corridor(store, args, mode=context['mode']),
             'facts.queue': lambda args, context: __import__('verda.agency.queue', fromlist=['x']).work_queue(store, args, mode=context['mode']),
-            'listings.rank': lambda args, context: __import__('verda.agency.score', fromlist=['x']).ranking(store, args, mode=context['mode']),
+            'listings.rank': lambda args, context: __import__('verda.agency.opportunity', fromlist=['x']).one_ranking(store, args, mode=context['mode']),
             'network.reset_modem': lambda args, context: __import__('verda.agency.recovery', fromlist=['x']).reset_tool(store, args, mode=context['mode']),
             'replies.pending': lambda args, context: __import__('verda.agency.replies', fromlist=['x']).pending(store, args, mode=context['mode']),
             'watchdog.check': lambda args, context: __import__('verda.agency.watchdog', fromlist=['x']).check(store, args, mode=context['mode']),

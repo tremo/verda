@@ -499,3 +499,36 @@ def test_a_very_long_conversation_is_trimmed_to_the_newest_messages_so_its_recei
         {'role': 'seller' if i % 2 else 'user', 'text': f'{i} ' + 'x' * 1400, 'sent_at_text': f'{i}'} for i in range(60)]}
     receipt = thread_receipt('1000000001', raw)
     assert receipt['older_omitted'] and receipt['messages'][-1]['text'].startswith('59 ') and len(canonical(receipt).encode()) < 32768
+
+
+def test_a_page_that_is_slow_to_answer_is_waited_for_not_given_up_on():
+    from verda.agency.jev import wait_loaded
+    answers = iter([TimeoutError('Runtime.evaluate timed out'), 'loading', TimeoutError('again'), 'complete'])
+    asked = []
+
+    def evaluate(expression):
+        asked.append(expression)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    assert wait_loaded(evaluate, sleep=lambda s: None) is True and len(asked) == 4
+    ticks = iter(range(1000))
+    assert wait_loaded(lambda e: 'loading', seconds=5, sleep=lambda s: None, clock=lambda: next(ticks)) is False     # the wait has an end
+
+
+def test_a_failed_read_names_the_line_that_raised_and_the_step_of_ours_that_led_there():
+    import time as clock
+    from verda.agency.jev import failure_detail, wait_loaded
+
+    def library_call(expression):
+        return clock.strptime('x', '%Y')                    # raises inside the standard library, like the harness does inside its own files
+    try:
+        wait_loaded(library_call, sleep=lambda s: None)
+    except ValueError as error:
+        detail = failure_detail(error)
+    assert detail.startswith('ValueError@_strptime.py:') and ' via jev.py:' in detail
+    try:
+        raise KeyError('page text that must not travel')
+    except KeyError as error:
+        assert failure_detail(error).startswith('KeyError@test_jev.py:') and 'page text' not in failure_detail(error)

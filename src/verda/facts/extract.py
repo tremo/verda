@@ -62,6 +62,14 @@ def parcel_from_listing(payload: dict) -> str | None:
     return key if PARCEL.match(key) else None      # 0/0 and friends are placeholders
 
 
+def says_copy_date(payload):
+    """'@2026-10-23' when the sit answer came from the saved copy of the layer (the live source was closed): the date travels with the fact."""
+    if payload.get('layer_origin') != 'saved_copy' or not isinstance(payload.get('layer_as_of'), (int, float)):
+        return ''
+    import datetime
+    return '@' + datetime.date.fromtimestamp(payload['layer_as_of']).isoformat()
+
+
 def ada_unstated_parsel(payload: dict) -> str | None:
     """The parsel no of a listing whose ada says "Belirtilmemiş" ("778", "1.757" -> "778", "1757"); None when the ada is given, the label is missing
     or there is no usable parsel no. The ada is then not a fact but a guess (facts.model.ADA_GUESSES), checked against the official area."""
@@ -90,7 +98,7 @@ def extract(tool: str, observation_id: str, mode: str, payload: Any, listing_ref
         if value is None or not listing_ref:
             return []
         return [Proposal(listing_ref=listing_ref, field='natural_sit', value=value, proposer='code:says_overlay@1', mode=mode, observation_id=observation_id,
-                         source_ref='says:' + str(payload.get('layer')))]
+                         source_ref='says:' + str(payload.get('layer')) + says_copy_date(payload))]
     if tool == NEIGHBORS:
         # A numbered neighbour that is itself a road parcel is road frontage. "No road neighbour" is not "no easement": no fact.
         if payload.get('verdict') != 'road_neighbor' or not listing_ref:

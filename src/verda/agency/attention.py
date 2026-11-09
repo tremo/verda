@@ -72,6 +72,16 @@ def attention(store, *, mode='local', now=None, queue=None):
                                   'title': 'Sahibinden oturumu otomatik açılamadı', 'detail': f"Denemeler tükendi ({session.get('attempts', 0)} deneme, son sebep: {last.get('reason', 'bilinmiyor')}"
                                   f"{' — ' + last['detail'] if last.get('detail') else ''}). Chrome'da elle giriş yapıp kaynağı devam ettirmen gerekir.", 'listings': []})
                 continue
+            if i['resource'] == 'says':
+                from verda.agency import says
+                day = says.copy_day(store)
+                if day:
+                    # The check goes on from the saved copy, so nothing waits for the user: told once, as information.
+                    items.append({'key': 'incident:' + i['id'], 'kind': 'source_on_saved_copy', 'severity': INFO, 'since': i['created_at'], 'ackable': True,
+                                  'title': 'Doğal sit haritası kapalı; kayıtlı kopya kullanılıyor',
+                                  'detail': f"Bakanlık sunucusu erişimi kapattı ({i['reason']}). Sistem bunu aşmaya çalışmaz; {day} tarihli son kopyadan cevap verir ve bu tarihi sonucun yanında gösterir. "
+                                            'Sunucu yeniden açılırsa kaynağı devam ettirmen yeter; kopya o zaman yenilenir.', 'listings': []})
+                    continue
             advice = RATE_LIMIT_NOTE if (i['resource'], i['reason']) in RATE_LIMITED else 'Sorunu giderince kaynağı devam ettirmen gerekir; o zamana kadar bu kaynağın tüm işleri bekler.'
             items.append({'key': 'incident:' + i['id'], 'kind': 'source_blocked', 'severity': ACTION, 'since': i['created_at'], 'ackable': False,
                           'title': f"{i['resource']} erişimi durdu", 'detail': f"Sebep: {i['reason']}. {advice}", 'listings': []})

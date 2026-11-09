@@ -246,6 +246,23 @@ def connect_chrome(wait=90, attach=None, approve=None, sleep=time.sleep):
     return None if outcome.get('ok') else 'chrome_connection_missing'
 
 
+NAVIGATION_SECONDS = 30      # how long a page may take to answer and load
+
+
+def wait_loaded(evaluate, *, seconds=NAVIGATION_SECONDS, sleep=time.sleep, clock=time.monotonic):
+    """Wait until the document has loaded; True when it has. A reply that does not come in time means the page is still busy, not that the read failed:
+    on 9 Nov 2026 pages that used to be ready in 2 s took 9-23 s, every answer ran into the harness's 5 s reply limit and 39 of 43 inbox reads were lost."""
+    deadline = clock() + seconds
+    while clock() < deadline:
+        try:
+            if evaluate('document.readyState') == 'complete':
+                return True
+        except TimeoutError:
+            pass
+        sleep(0.05)
+    return False
+
+
 def visible_browser(url):
     """A plain foreground tab in the user's own Chrome profile and session.
 
@@ -261,12 +278,8 @@ def visible_browser(url):
             self.target = cdp('Target.createTarget', url='about:blank')['targetId']
             register_tab(self.target)
             self.session = cdp('Target.attachToTarget', targetId=self.target, flatten=True)['sessionId']
-            self.call('Page.navigate', url=url)
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if self.evaluate('document.readyState') == 'complete':
-                    break
-                time.sleep(0.05)
+            self.call('Page.navigate', url=url, _response_timeout=NAVIGATION_SECONDS)      # the site's answer may take longer than the harness's usual 5 s
+            wait_loaded(self.evaluate)
     return Visible(url)
 
 
@@ -881,6 +894,21 @@ def send_job(bridge, job, worker, report, browser_factory=None, open_page=None, 
         raise JevStopped(stop.code) from None
 
 
+def failure_detail(error):
+    """Where a read failed, as class and source lines only (an exception's message may carry page content): the line that raised and, when that is
+    inside a library, the line of this module that led there. "_IPCResponseTimeout@helpers.py:63" alone named the harness, not the step that waited."""
+    frames, tb = [], error.__traceback__
+    while tb:
+        frames.append((Path(tb.tb_frame.f_code.co_filename).name, tb.tb_lineno))
+        tb = tb.tb_next
+    if not frames:
+        return type(error).__name__
+    here = Path(__file__).name
+    ours = next((f for f in reversed(frames) if f[0] == here), None)
+    detail = '%s@%s:%s' % (type(error).__name__, *frames[-1])
+    return detail + (' via %s:%s' % ours if ours and ours != frames[-1] else '')
+
+
 def run_worker(store, *, env_file=None, continuous=False, reader=None, visible=False, launch=True):
     from verda.agency.browser import BrowserBridge
     load_env(env_file)
@@ -972,11 +1000,7 @@ def run_worker(store, *, env_file=None, continuous=False, reader=None, visible=F
                         pass                               # reporting never decides the outcome
                     bridge.finish(job['id'],worker,job['token'],error=error.code)
                 except Exception as error:
-                    tb = error.__traceback__
-                    while tb and tb.tb_next:
-                        tb = tb.tb_next
-                    # Class and source line only: exception messages may carry page content.
-                    report('read_failed', '%s@%s:%s' % (type(error).__name__, Path(tb.tb_frame.f_code.co_filename).name, tb.tb_lineno) if tb else type(error).__name__)
+                    report('read_failed', failure_detail(error))
                     bridge.finish(job['id'],worker,job['token'],error='read_failed')
                 else:
                     bridge.finish(job['id'],worker,job['token'],result=result)

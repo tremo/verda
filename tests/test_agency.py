@@ -464,3 +464,64 @@ def test_a_batch_of_ten_is_read_once_each_and_finishes_inside_the_turn_budget(tm
     assert reader.contexts[0]['batch_progress'] == {'done': [], 'remaining': ids, 'next': ids[0]}
     assert reader.contexts[6]['batch_progress'] == {'done': ids[:6], 'remaining': ids[6:], 'next': ids[6]}
     assert reader.contexts[10]['batch_progress']['next'] is None
+
+
+def test_a_tool_that_can_answer_from_a_saved_copy_runs_while_its_source_is_stopped_and_never_reopens_it(tmp_path):
+    schema = {'type': 'object', 'properties': {'id': {'type': 'string'}}, 'required': ['id'], 'additionalProperties': False}
+    cfg = AgencyConfig(agents=(AgentDefinition(key='operator', label='Operator', description='Uses tools', prompt='Read', tools=('test.saved', 'test.live')),),
+                       tools=(ToolDefinition(key='test.saved', label='Saved', description='Answers from a copy', transport='python', resource='site', works_offline=True, input_schema=schema),
+                              ToolDefinition(key='test.live', label='Live', description='Needs the source', transport='python', resource='site', input_schema=schema)))
+    s, r = setup(tmp_path, cfg, {'test.saved': lambda args: {'from': 'copy'}, 'test.live': lambda args: {'from': 'source'}})
+    with sqlite3.connect(s.path) as con:
+        con.execute("INSERT INTO resources(key, halted) VALUES('site', 'http_401')")
+    saved = s.submit(agent='operator', objective='copy', inputs={'id': 'a'}, request_key='saved', executor_tool='test.saved', now=0)
+    live = s.submit(agent='operator', objective='source', inputs={'id': 'a'}, request_key='live', executor_tool='test.live', now=0)
+    engine = AgentEngine(s, r, {})
+    for n in range(4):
+        engine.step(now=n + 1)
+    tasks = {t['id']: t for t in s.overview()['tasks']}
+    assert tasks[saved]['state'] == 'complete' and tasks[live]['state'] == 'blocked' and tasks[live]['reason'] == 'http_401'
+    with sqlite3.connect(s.path) as con:
+        assert con.execute("SELECT halted, owner FROM resources WHERE key='site'").fetchone() == ('http_401', None)           # still stopped, owned by nobody
+        started = [json.loads(d) for (d,) in con.execute("SELECT data FROM agency_events WHERE kind='tool_started'")]
+    assert [e.get('offline') for e in started if e['tool'] == 'test.saved'] == [True]
+
+
+def test_the_withdrawn_claim_test_has_its_index_on_a_new_and_on_an_existing_database(tmp_path):
+    s, _ = setup(tmp_path)
+    indexes = lambda: {r[0] for r in sqlite3.connect(s.path).execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert 'claims_resolves' in indexes()
+    with sqlite3.connect(s.path) as con:
+        con.execute('DROP INDEX claims_resolves')                         # a database from before the index
+    assert 'claims_resolves' not in indexes()
+    s.initialize()
+    s.initialize()                                                        # asked for on every start; twice is as good as once
+    assert 'claims_resolves' in indexes()
+    plan = ' '.join(r[3] for r in sqlite3.connect(s.path).execute(
+        "EXPLAIN QUERY PLAN SELECT 1 FROM claims c WHERE listing_ref='x' AND mode='local' AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=c.id AND w.status='withdrawn')"))
+    assert 'claims_resolves' in plan
+
+
+def test_a_database_busy_for_a_moment_is_waited_out_and_one_that_stays_busy_still_fails(tmp_path, monkeypatch):
+    from verda.agency import store as store_module
+    s, _ = setup(tmp_path)
+    real, busy = sqlite3.connect, {'left': 0, 'begins': 0}
+
+    class Busy(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql == 'BEGIN IMMEDIATE':
+                busy['begins'] += 1
+                if busy['left'] > 0:
+                    busy['left'] -= 1
+                    raise sqlite3.OperationalError('database is locked')
+            return super().execute(sql, *args)
+    monkeypatch.setattr(store_module.sqlite3, 'connect', lambda *a, **k: real(*a, **{**k, 'factory': Busy}))
+    busy.update(left=2, begins=0)
+    with s.transaction() as con:
+        assert con.execute('SELECT count(*) FROM inbox').fetchone()[0] == 0
+    assert busy['begins'] == 3                                            # two refusals, then in
+    busy.update(left=99, begins=0)
+    with pytest.raises(sqlite3.OperationalError, match='locked'):
+        with s.transaction():
+            pass
+    assert busy['begins'] == store_module.BEGIN_TRIES

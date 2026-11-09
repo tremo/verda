@@ -107,3 +107,81 @@ def test_every_deed_of_a_sale_is_overlaid_and_a_changed_parcel_is_checked_again(
     assert view['decision']['state'] == 'excluded' and 'first_degree_natural_sit' in view['decision']['reasons']
     total = view['facts']['sale_area_m2']
     assert total['value'] == 3020.8 and total['source_ref'] == '123/45 + 123/46' and len(total['parts']) == 2      # 1510.40 per deed in the fake
+
+
+# ---- the ministry's server closed to us (it asks for a login since about 23 Oct 2026): the saved copy answers, with its date --------
+SAVED_AT = 1792756800.0            # 23 Oct 2026, 12:00 local time
+
+
+def closed_source_store(tmp_path, features, calls):
+    import os
+
+    def net(url):
+        calls.append(url)
+        raise AssertionError('a stopped source is never contacted')
+    box = {}
+    store, registry = python_listing_store(tmp_path, [listing_payload()], extra={
+        'tkgm.lookup': client(tmp_path / 'x', fetch=fake_net(parcel_feature())).lookup,
+        'sit.says': lambda a: says.check(box['store'], a, now=SAVED_AT + 17 * 86400, fetch=net)})
+    box['store'] = store
+    read(store, registry, 'listing')
+    read(store, registry, 'tkgm', tool='tkgm.lookup', agent='parcel', start=10, inputs={'parcel_key': '123/45', 'neighborhood': 'Kızlan'})
+    if features is not None:
+        says.layer_path(store).write_text(json.dumps(layer_of(*features)))
+        os.utime(says.layer_path(store), (SAVED_AT, SAVED_AT))
+    with store.transaction() as con:
+        con.execute("INSERT OR IGNORE INTO resources(key) VALUES('says')")
+        con.execute("UPDATE resources SET halted='says_http_401' WHERE key='says'")
+        con.execute("INSERT INTO source_incidents(id,resource,mode,reason,state,created_at) VALUES('inc-says','says','local','says_http_401','open',100.0)")
+    return store, registry
+
+
+def test_while_the_source_is_closed_the_saved_copy_answers_and_the_fact_carries_the_copys_date(tmp_path):
+    from verda.agency.queue import work_queue
+    calls = []
+    store, registry = closed_source_store(tmp_path, [area('2.Derece Doğal Sit Alanı')], calls)
+    assert [g['action'] for g in work_queue(store, {}, mode='local')['groups'] if g['action'] == 'sit.says'] == ['sit.says']      # handed out although the source is stopped
+    read(store, registry, 'sit', tool='sit.says', agent='parcel', start=20)
+    assert calls == []
+    fact = status(store)['facts']['natural_sit']
+    assert fact['value'] == 'second_degree' and fact['grade'] == 'resmi' and fact['source_ref'].endswith('@2026-10-23')
+    payload = json.loads(table(store, "SELECT payload FROM observations WHERE tool='sit.says'")[0]['payload'])
+    assert payload['layer_origin'] == 'saved_copy' and payload['layer_as_of'] == SAVED_AT and payload['feature_count'] == 1
+    # answering from the copy never reopens the source: that stays a person's decision
+    assert table(store, "SELECT halted, owner FROM resources WHERE key='says'") == [{'halted': 'says_http_401', 'owner': None}]
+    assert table(store, "SELECT state FROM source_incidents WHERE id='inc-says'") == [{'state': 'open'}]
+    assert table(store, "SELECT state FROM tool_calls WHERE tool='sit.says'") == [{'state': 'complete'}]
+
+
+def test_without_a_saved_copy_a_closed_source_keeps_the_check_waiting(tmp_path):
+    import pytest
+    from verda.agency.queue import work_queue
+    from verda.agency.registry import ResourceBlocked
+    store, registry = closed_source_store(tmp_path, None, [])
+    assert not any(g['action'] == 'sit.says' for g in work_queue(store, {}, mode='local')['groups'])
+    with pytest.raises(ResourceBlocked, match='says_http_401'):
+        says.check(store, {'listing_id': ID}, fetch=lambda url: 1 / 0)
+    says.layer_path(store).write_text('not json')                       # an unreadable file is no copy
+    assert says.saved_layer(says.layer_path(store)) is None and says.copy_day(store) is None
+
+
+def test_a_live_answer_names_no_copy_date_and_a_fresh_download_is_the_layers_own_day():
+    live = {'classification': 'none', 'layer': says.LAYER, 'layer_origin': 'live', 'layer_as_of': SAVED_AT}
+    saved = {**live, 'layer_origin': 'saved_copy'}
+    ref = lambda payload: extract('sit.says', 'o1', 'local', {'listing_id': ID, **payload}, ID)[0].source_ref
+    assert ref(live) == 'says:' + says.LAYER and ref(saved) == 'says:' + says.LAYER + '@2026-10-23'
+    assert ref({'classification': 'none', 'layer': says.LAYER}) == 'says:' + says.LAYER                 # records from before the date was written
+
+
+def test_a_closed_sit_source_with_a_copy_is_information_not_an_alarm(tmp_path):
+    from verda.agency.attention import attention
+    store, _ = closed_source_store(tmp_path, [area('2.Derece Doğal Sit Alanı', x0=10.0, x1=11.0)], [])       # a copy with areas elsewhere
+    item = next(i for i in attention(store, now=SAVED_AT + 17 * 86400, queue={'skipped_ids': {}})['items'] if i['key'] == 'incident:inc-says')
+    assert item['kind'] == 'source_on_saved_copy' and item['severity'] == 'info' and '23.10.2026' in item['detail'] and 'aşmaya çalışmaz' in item['detail']
+    from verda.publish import status as page
+    health = page.build(store, now=SAVED_AT + 17 * 86400, running={})['health']
+    line = next(h for h in health if 'sit haritası' in h['text'])
+    assert line['level'] == 'warn' and '23.10.2026' in line['text'] and not any(h['text'].startswith('Kaynak engelli: says') for h in health)
+    says.layer_path(store).unlink()                                       # no copy: the stop is the user's concern again
+    item = next(i for i in attention(store, now=SAVED_AT + 17 * 86400, queue={'skipped_ids': {}})['items'] if i['key'] == 'incident:inc-says')
+    assert item['kind'] == 'source_blocked' and item['severity'] == 'action'

@@ -1,7 +1,7 @@
 """The opportunity score: "is this a good buy for what this buyer wants", next to the older price-vs-peers score (which stays as it is).
 
-1. Fair price: from comparables (agency/comparables.py): same-neighbourhood parcels with a known road when there are enough, otherwise the neighbourhood's
-   level relative to the others, otherwise none. A listing's gap to its fair price is judged against how much asking prices normally scatter.
+1. Asking-price reference: Datça-wide parcels with matching known access/title/sit/sale scope (agency/comparables.py).
+   Weak evidence is explicitly labelled and earns no price advantage. There is no area price coefficient.
 2. Purpose fit: investment 40% / house 20% / production 40% (the buyer's own split), from facts the system knows. A fact it does not know scores
    in the middle and is shown as unknown; it never counts as bad.
 3. Distance to the destination: 15% (was 30%).
@@ -185,22 +185,32 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
         return {'score': score, 'opportunity': None, 'purpose': purpose, 'proximity': near, 'label': 'Belirsiz', 'road': road,
                 'fair_unit_price': None, 'gap_pct': None, 'caps': caps, 'parts': parts, 'basis': basis, 'signals': _signals(moved, extra)}
     rate = price / area
+    scatter = estimate.get('scatter', scatter)
     gap_ln = math.log(fair / rate)
     purpose, parts = purpose_fit(kind, area, road, text, sit_known, hood_effect)
     opp = opportunity_score(gap_ln)
     doubt = []
-    if gap_ln > TOO_GOOD * scatter:
+    weak = estimate.get('confidence') == 'low'
+    if not weak and gap_ln > TOO_GOOD * scatter:
         # Counted as a strong opportunity and no more until a person has checked the price and the area against the listing and TKGM.
         opp, doubt = min(opp, opportunity_score(scatter)), ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']
         extra = 0               # a price already too good to believe earns nothing more for having fallen
     if estimate['tier'] == 'region':
         # A regional estimate is only a level: a gap smaller than its own range is not a signal, and never a "strong" one.
         opp = min(opp, opportunity_score(0.5 * scatter))
+    if weak:
+        opp, extra = 50, 0          # a weak reference is not evidence of a bargain (or of overpricing)
+        doubt.append('emsal güveni düşük: fiyat avantajı puana eklenmedi')
     final, capped = combine(opp, purpose, near, price, area, gap_ln, row.get('penalties') or {}, extra)
     capped = doubt + capped
     if road == ENCLOSED:
         final, capped = max(0, final - ROAD_QUESTION_PENALTY), capped + ['yol: geçiş hakkı sorusu bekliyor −40']
     shown = label(gap_ln, scatter)
+    if weak:
+        final, shown = min(49, final), 'Düşük güven'
+        capped.append('emsal güveni düşük: puan en çok 49')
+    elif estimate.get('method') == comparables.METHOD and shown == 'Güçlü fırsat':
+        shown = 'Olası fırsat'      # water, slope, etc. are still unmodelled; no high-confidence grade yet
     if estimate['tier'] == 'region' and shown in ('Güçlü fırsat', 'Olası fırsat'):
         shown = 'Adil fiyat'
     return {'score': final, 'opportunity': opp, 'purpose': purpose, 'proximity': near, 'label': shown, 'road': road,
@@ -213,10 +223,12 @@ def _basis(estimate):
     out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n'), 'size_adjusted': False}
     if estimate.get('low') is not None:
         out['low'], out['high'] = round(estimate['low']), round(estimate['high'])
-    for key in ('effect_pct', 'reference'):
+    for key in ('method', 'confidence', 'effective_n', 'fit_n', 'conditions', 'warnings', 'unmodeled', 'exclusions', 'subject_issues', 'effect_pct', 'reference'):
         if key in estimate:
             out[key] = estimate[key]
-    if estimate['tier'] == 'local':
+    if estimate.get('method') == comparables.METHOD:
+        out['comps'] = estimate.get('comps', [])
+    elif estimate['tier'] == 'local':
         out['comps'] = [{'ids': c['ids'], 'rate': c['rate'], 'area': c['area'], 'adjusted': c['adjusted']} for c in estimate.get('comps', [])]
     return out
 
@@ -253,7 +265,8 @@ def rank_all(store, *, mode='local', now=None):
         if listing not in known:
             known[listing] = fact_status(store, listing, mode=mode)
         return known[listing]
-    peers = comparables.roads(store, base.peers_from(base.peer_rows(store, mode, status)), known)      # the old archive overlaid by what this system verified
+    peer_rows = base.peer_rows(store, mode, status)
+    peers = comparables.prepare(peer_rows, known, comparables.price_dates(store, mode), now)
     estimator = comparables.Estimator(peers, hood_of, LAND, _solve)
     scatter = estimator.sigma
     mean_effect = statistics.fmean(estimator.effects.values()) if estimator.effects else 0.0
@@ -312,6 +325,7 @@ def one_ranking(store, args=None, *, mode='local'):
         new, basis = r['new'], r['new'].get('basis') or {}
         rows.append({**{k: v for k, v in r.items() if k != 'new'}, 'score': new['score'], 'purchase_score': r['score'], 'label': new['label'], 'gap_pct': new['gap_pct'],
                      'fair_unit_price': new['fair_unit_price'], 'fair_tier': basis.get('tier'), 'fair_n': basis.get('n'), 'fair_note': basis.get('note'),
+                     'fair_confidence': basis.get('confidence'), 'fair_warnings': basis.get('warnings') or [],
                      'road': new['road'], 'caps': new['caps'], 'signals': new.get('signals') or [],
                      'parts': {'opportunity': new['opportunity'], 'purpose': new['purpose'], 'proximity': new['proximity'], **new['parts']}})
     return {'ranked': rows[:limit], 'total': len(rows), 'settled': sum(not r['provisional'] for r in rows), 'note': NOTE}

@@ -271,8 +271,8 @@
       if (row.gap_pct == null) { tCmp.b.textContent = 'adil fiyat yok'; tCmp.b.className = 'dim'; tCmp.sub.textContent = row.fair_note || 'puan en çok 49'; return; }
       const dp = row.gap_pct; tCmp.b.textContent = (row.label || 'Adil fiyat') + ' ' + (dp >= 0 ? '+' : '−') + '%' + dec(Math.abs(dp));
       tCmp.b.className = ['Güçlü fırsat', 'Olası fırsat'].includes(row.label) ? 'hi' : ['Pahalı', 'Adilin üstünde'].includes(row.label) ? 'bad' : '';
-      tCmp.sub.textContent = [row.fair_tier === 'local' ? 'mahallede ' + row.fair_n + ' emsal' : 'bölgesel tahmin', ...(row.caps || [])].join(' · ');
-      if (row.fair_unit_price) tUnit.sub.textContent = 'adil ' + num(row.fair_unit_price) + ' ₺/m²';
+      tCmp.sub.textContent = [row.fair_tier === 'datca' ? 'Datça genelinde ' + row.fair_n + ' emsal · ' + (row.fair_confidence === 'low' ? 'düşük güven' : 'orta güven') : row.fair_tier === 'local' ? 'mahallede ' + row.fair_n + ' emsal' : 'bölgesel tahmin', ...(row.caps || [])].join(' · ');
+      if (row.fair_unit_price) tUnit.sub.textContent = 'emsal ' + num(row.fair_unit_price) + ' ₺/m²';
     }).catch(() => { tScore.b.textContent = '—'; tCmp.b.textContent = '—'; });
   }).catch(e => { app.textContent = ''; el('p', e.message, 'bad', el('section', null, null, app)); });
 })();

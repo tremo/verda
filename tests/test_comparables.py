@@ -1,130 +1,255 @@
-import math
-import random
-import statistics
-
 import pytest
 
-from verda.agency.comparables import Estimator, MIN_LOCAL
-from verda.agency.opportunity import LAND, _solve, hood_of, label, listing_view
+from verda.agency import comparables as c
+from verda.agency.opportunity import LAND, _solve, hood_of, listing_view
+
+NOW = 20_000_000.0
 
 
-def peer(i, hood, area, rate, kind='Tarla', road='ok'):
-    return {'ids': {str(i)}, 'type': kind, 'area': area, 'rate': rate, 'neighborhood': hood + ' Mh.', 'road': road}
+def add(data, i, hood='Yaka', kind='Zeytinlik', area=4000, rate=2000, **overrides):
+    rows, statuses, dates = data
+    i = str(i)
+    values = {'parcel_key': f'100/{i}', 'price_tl': rate * area, 'sale_area_m2': area,
+              'sale_scope_resolved': True, 'access': 'direct', 'shared_title': False,
+              'natural_sit': 'none', 'archaeological_sit': False, 'property_type': kind}
+    values.update(overrides)
+    facts = {k: {'value': v, 'grade': 'resmi', 'claim_id': f'{i}:{k}'} for k, v in values.items() if v is not None}
+    rows.append({'id': i, 'price': rate * area, 'area': area, 'type': kind, 'neighborhood': hood + ' Mh.', 'parcel': values['parcel_key']})
+    statuses[i] = {'facts': facts, 'parcels': [values['parcel_key']], 'conflicts': []}
+    dates[f'{i}:price_tl'] = NOW - 86400
+    return rows[-1]
+
+
+def estimator(data):
+    rows, statuses, dates = data
+    return c.Estimator(c.prepare(rows, statuses, dates, NOW), hood_of, LAND, _solve)
+
+
+def small():
+    data = [], {}, {}
+    add(data, 999)
+    for i, rate in enumerate((1000, 2000, 3000, 4000), 1):
+        add(data, i, area=3000 + i * 500, rate=rate)
+    return data
 
 
 def market():
-    """Asking prices vary with size, but the estimator must not impose that trend on a subject."""
-    random.seed(3)
-    out, n = [], 0
-    for hood, level in (('Mesudiye', 3000), ('Sındı', 1500), ('Yazı', 1400)):
-        for area in (2000, 2500, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 12000):
-            n += 1
-            out.append(peer(n, hood, area, level * (area / 5000) ** -0.55 * math.exp(random.gauss(0, 0.05))))
-    return out
+    data = [], {}, {}
+    add(data, 999)
+    i = 0
+    for hood, level in [('Yaka', 2000), ('Mesudiye', 3000), ('Cumalı', 1500)]:
+        for kind, factor in [('Tarla', 1.0), ('Zeytinlik', 1.1), ('Bademlik', 1.05)]:
+            for n in range(12):
+                i += 1
+                add(data, i, hood, kind, area=3000 + n * 100, rate=level * factor)
+    return data
 
 
-def test_enough_local_comparables_give_the_median_with_their_links():
-    peers = market()
-    estimate = Estimator(peers, hood_of, LAND, _solve).estimate('Tarla', 6000, 'Sındı Mh.', '999')
-    assert estimate['tier'] == 'local' and estimate['n'] >= MIN_LOCAL
-    rates = [p['rate'] for p in peers if p['neighborhood'] == 'Sındı Mh.' and 3000 <= p['area'] <= 12000]
-    assert estimate['fair'] == statistics.median(rates)
-    assert estimate['low'] <= estimate['fair'] <= estimate['high']
-    assert all(c['ids'] for c in estimate['comps'])
-    assert all(c['adjusted'] == c['rate'] for c in estimate['comps'])
+def estimate(data, area=4000, listing='999'):
+    return estimator(data).estimate('Zeytinlik', area, 'Yaka', listing)
 
 
-def test_same_local_comparables_do_not_get_a_size_discount_or_premium():
-    peers = [peer(i, 'Sındı', area, rate) for i, (area, rate) in enumerate(
-        [(3000, 1000), (3500, 2000), (4000, 3000), (5000, 4000)])]
-    estimator = Estimator(peers, hood_of, LAND, _solve)
+def test_same_peers_give_same_median_at_different_subject_areas_without_any_size_adjustment():
+    data = small()
     for area in (4000, 5000):
-        estimate = estimator.estimate('Tarla', area, 'Sındı Mh.', '999')
-        assert estimate['tier'] == 'local' and estimate['fair'] == 2500
-        row = {'type': 'Tarla', 'area_m2': area, 'price_tl': area * 1500, 'route_minutes_max': 15, 'penalties': {}}
-        view = listing_view(row, estimate, 0.5, '', None, True)
-        assert view['gap_pct'] == 40 and view['basis']['size_adjusted'] is False
+        v = estimate(data, area)
+        assert v['tier'] == 'datca' and v['n'] == 4 and v['fair'] == 2500
+        assert all(p['rate'] == p['adjusted'] for p in v['comps'])
+        assert v['size_adjusted'] is False
 
 
-def test_a_parcel_without_a_known_road_is_never_a_local_comparable_and_a_bad_one_is_in_no_step():
-    peers = market()
-    for p in peers:
-        if p['neighborhood'].startswith('Sındı'):
-            p['road'] = None
-    est = Estimator(peers, hood_of, LAND, _solve).estimate('Tarla', 6000, 'Sındı Mh.', '999')
-    assert est['tier'] == 'region' and est['n'] == 0                                  # same neighbourhood, but nothing with a road: the regional step
-    for p in peers:
-        if p['neighborhood'].startswith('Sındı'):
-            p['road'] = 'bad'
-    assert Estimator(peers, hood_of, LAND, _solve).estimate('Tarla', 6000, 'Sındı Mh.', '999')['tier'] == 'none'    # too few rows left to know the neighbourhood
+def test_all_datca_remains_in_the_pool_when_a_fourth_local_peer_arrives():
+    data = [], {}, {}
+    add(data, 999)
+    for i in range(1, 4):
+        add(data, i, rate=3000)
+    for i in range(4, 14):
+        add(data, i, hood='Cumalı', rate=1000)
+    before = estimate(data)
+    add(data, 14, rate=3000)
+    after = estimate(data)
+    assert before['tier'] == after['tier'] == 'datca'
+    assert before['n'] == 13 and after['n'] == 14
+    assert {p['neighborhood'] for p in after['comps']} == {'Yaka Mh.', 'Cumalı Mh.'}
+    assert before['fair'] < 3000 and after['fair'] < 3000  # no switch to the local-only median
 
 
-def test_the_regional_step_carries_the_neighbourhood_level_and_a_wider_range():
-    peers = market()
-    for p in peers:
-        if p['neighborhood'].startswith('Sındı'):
-            p['road'] = None
-    estimator = Estimator(peers, hood_of, LAND, _solve)
-    est = estimator.estimate('Tarla', 6000, 'Sındı Mh.', '999')
-    expected = math.exp(statistics.mean(math.log(p['rate']) for p in peers if p['neighborhood'] == 'Sındı Mh.'))
-    assert est['fair'] == pytest.approx(expected, rel=1e-5)
-    assert est['effect_pct'] < -40 and est['reference'] in ('Mesudiye', 'Sındı', 'Yazı')
-    assert est['high'] / est['low'] > 1.2
-    assert estimator.estimate('Tarla', 3000, 'Sındı Mh.', '999')['fair'] == est['fair']
-    assert estimator.estimate('Tarla', 9000, 'Sındı Mh.', '999')['fair'] == est['fair']
+@pytest.mark.parametrize('field,value', [
+    ('access', 'corridor_conditional'), ('access', None), ('access', 'none'),
+    ('shared_title', None), ('shared_title', True), ('sale_scope_resolved', None),
+    ('natural_sit', None), ('natural_sit', 'first_degree'),
+    ('archaeological_sit', None), ('archaeological_sit', True),
+    ('price_tl', None), ('sale_area_m2', None), ('user_excluded', True),
+])
+def test_unconfirmed_or_ineligible_peers_do_not_enter_price_or_coefficient_learning(field, value):
+    data = small()
+    r = add(data, 10, rate=1000000, **{field: value})
+    r['road'] = 'ok'                 # an old archive flag cannot override current conditional/unknown access
+    v = estimate(data)
+    assert v['fair'] == 2500 and v['n'] == 4
+    assert all('10' not in p['ids'] for p in v['comps'])
 
 
-def test_regional_fit_excludes_the_subjects_own_price_and_all_duplicate_listing_ids():
-    peers = market()
-    for p in peers:
-        p['road'] = None
-    mine = peers[12]
-    mine['ids'].add('duplicate')
-    mine['rate'] *= 10
-    rates = [p['rate'] for p in peers if p['neighborhood'] == mine['neighborhood'] and p is not mine]
-    expected = math.exp(statistics.mean(math.log(rate) for rate in rates))
-    estimator = Estimator(peers, hood_of, LAND, _solve)
-    for listing in mine['ids']:
-        estimate = estimator.estimate(mine['type'], mine['area'], mine['neighborhood'], listing)
-        assert estimate['tier'] == 'region' and estimate['fair'] == pytest.approx(expected, rel=1e-5)
+def test_direct_access_does_not_mix_with_easements_or_different_sit_states():
+    data = small()
+    add(data, 10, rate=100, access='existing_easement')
+    add(data, 11, rate=100, natural_sit='second_degree')
+    v = estimate(data)
+    assert v['fair'] == 2500 and v['n'] == 4
+    assert next(x['n'] for x in v['exclusions'] if x['reason'] == 'conditions') == 2
+    # The same rule works for an easement subject, with its own comparable group.
+    data[1]['999']['facts']['access']['value'] = 'existing_easement'
+    assert estimate(data)['fair'] is None
 
 
-def test_regional_type_and_neighbourhood_effects_survive_removing_area():
-    peers = []
-    for hood, level in (('Mesudiye', 2000), ('Sındı', 1000)):
-        for kind, factor in (('Tarla', 1.0), ('Zeytinlik', 1.1), ('Bademlik', 1.2)):
-            for area in (2000, 3000, 4000, 5000, 6000):
-                peers.append(peer(len(peers), hood, area, level * factor, kind=kind, road=None))
-    estimator = Estimator(peers, hood_of, LAND, _solve)
-    for hood, level in (('Mesudiye', 2000), ('Sındı', 1000)):
-        for kind, factor in (('Tarla', 1.0), ('Zeytinlik', 1.1), ('Bademlik', 1.2)):
-            for area in (2500, 5500):
-                estimate = estimator.estimate(kind, area, hood, 'new')
-                assert estimate['tier'] == 'region' and estimate['fair'] == pytest.approx(level * factor, rel=1e-5)
+def test_unknown_or_conditional_subject_access_blocks_a_fair_price_instead_of_assuming_a_road():
+    data = small()
+    data[1]['999']['facts']['access']['value'] = 'corridor_conditional'
+    v = estimate(data)
+    assert v['fair'] is None and v['subject_issues'] == ['access']
 
 
-def test_no_number_is_made_up_for_an_unknown_neighbourhood_or_a_size_far_outside_the_data():
-    estimator = Estimator(market(), hood_of, LAND, _solve)
-    assert estimator.estimate('Tarla', 6000, 'Bilinmeyen Mh.', '999')['fair'] is None
-    assert estimator.estimate('Tarla', 90000, 'Sındı Mh.', '999')['fair'] is None      # local needs half to twice the size; the fit stops at twice the largest
-    assert estimator.estimate('Tarla', None, 'Sındı Mh.', '999')['fair'] is None
+def test_missing_identity_and_scope_conflicts_block_the_subject():
+    data = small()
+    data[1]['999']['conflicts'] = ['sale_scope']
+    assert estimate(data)['fair'] is None
+    data[1]['999']['conflicts'] = []
+    data[1]['999']['parcels'] = []
+    data[0][0]['parcel'] = None
+    assert estimate(data)['fair'] is None
 
 
-def test_the_listing_is_not_its_own_comparable():
-    peers = market()
-    mine = peers[12]
-    est = Estimator(peers, hood_of, LAND, _solve).estimate('Tarla', mine['area'], mine['neighborhood'], next(iter(mine['ids'])))
-    assert all(next(iter(mine['ids'])) not in c['ids'] for c in est['comps'])
+def test_other_parcel_is_counted_once_across_neighbourhood_and_parcel_spellings():
+    data = small()
+    add(data, 10, hood='Yaka', parcel_key='Yaka:100/1', area=3500, rate=1000)
+    data[0][-1]['neighborhood'] = 'Köyler Yaka Mahallesi'
+    v = estimate(data)
+    assert v['n'] == 4 and v['fair'] == 2500
+    assert {'1', '10'} == set(next(p['ids'] for p in v['comps'] if '1' in p['ids']))
 
 
-def test_labels_name_the_real_gap():
-    assert label(-0.3, 0.47) == 'Adilin üstünde' and label(-0.05, 0.47) == 'Adil fiyat' and label(-0.5, 0.47) == 'Pahalı'
+def test_subject_price_and_all_its_aliases_are_excluded_even_from_learned_coefficients():
+    data = market()
+    before = estimate(data)
+    assert before['fit_n'] > 0
+    data[1]['999']['facts']['price_tl']['value'] *= 1000
+    add(data, 998, parcel_key='Yaka:100/999', rate=1000000)
+    data[0][-1]['neighborhood'] = 'Yaka Mahallesi'
+    after = estimate(data)
+    alias = estimate(data, listing='998')
+    assert before['fair'] == pytest.approx(after['fair']) == pytest.approx(alias['fair'])
+    assert before['comps'] == after['comps'] == alias['comps']
+    assert all(not {'999', '998'} & set(p['ids']) for p in after['comps'])
 
 
-def test_a_regional_estimate_never_makes_a_strong_opportunity():
-    row = {'type': 'Tarla', 'area_m2': 5000, 'price_tl': 2_500_000, 'neighborhood': 'Sındı Mh.', 'route_minutes_max': 15, 'penalties': {}}
-    region = {'tier': 'region', 'fair': 1500.0, 'low': 900.0, 'high': 2400.0, 'n': 0, 'comps': []}
-    local = {'tier': 'local', 'fair': 1500.0, 'low': 1400.0, 'high': 1600.0, 'n': 4, 'comps': []}
-    assert listing_view(row, region, 0.47, '', None, True)['label'] == 'Adil fiyat'     # 500 vs 1500 per m2 would read "strong" from four neighbours
-    assert listing_view(row, local, 0.47, '', None, True)['label'] == 'Güçlü fırsat'
-    assert listing_view(row, {'tier': 'none', 'fair': None}, 0.47, '', None, True)['label'] == 'Belirsiz'
+def test_overlapping_sale_packages_and_contradictory_duplicate_access_are_not_two_comparables():
+    data = small()
+    add(data, 10, parcel_key='100/1', area=3500, rate=1000)
+    data[1]['10']['parcels'] = ['100/1', '100/50']
+    v = estimate(data)
+    assert v['n'] == 3 and all(not {'1', '10'} & set(p['ids']) for p in v['comps'])
+    data[1]['10']['parcels'] = ['100/1']
+    data[1]['10']['facts']['access']['value'] = 'corridor_conditional'
+    assert estimate(data)['n'] == 3
+
+
+def test_age_changes_weight_and_stale_or_removed_ads_are_excluded():
+    data = small()
+    data[2]['1:price_tl'] = NOW - 181 * 86400
+    data[2]['2:price_tl'] = None
+    data[2]['3:price_tl'] = NOW - 100 * 86400
+    v = estimate(data)
+    assert v['n'] == 3 and v['confidence'] == 'low'
+    cs = {p['ids'][0]: p for p in v['comps']}
+    assert cs['2']['weight'] < cs['3']['weight'] < cs['4']['weight']
+    assert cs['2']['age_days'] is None
+    data[1]['4']['seen'] = {'listing_removed': True}
+    assert estimate(data)['fair'] is None
+
+
+def test_price_age_uses_observation_time_not_import_or_claim_creation_time():
+    from contextlib import contextmanager
+    import sqlite3
+    from types import SimpleNamespace
+    con = sqlite3.connect(':memory:')
+    con.row_factory = sqlite3.Row
+    con.executescript('''CREATE TABLE claims(id, created_at, source_kind, observation_id, mode, field, status);
+        CREATE TABLE observations(id, mode, tool, captured_at);''')
+    con.executemany('INSERT INTO observations VALUES(?,?,?,?)', [
+        ('ad', 'local', 'sahibinden.read_listing', 100), ('archive', 'local', 'legacy.import', 900)])
+    con.executemany('INSERT INTO claims VALUES(?,?,?,?,?,?,?)', [
+        ('observed', 900, 'listing', 'ad', 'local', 'price_tl', 'accepted'),
+        ('imported', 900, 'listing', 'archive', 'local', 'price_tl', 'accepted'),
+        ('edited', 800, 'user', None, 'local', 'price_tl', 'accepted'),
+        ('rejected', 900, 'listing', 'ad', 'local', 'price_tl', 'rejected')])
+
+    @contextmanager
+    def transaction():
+        yield con
+    try:
+        assert c.price_dates(SimpleNamespace(transaction=transaction), 'local') == {'observed': 100, 'imported': None, 'edited': 800}
+    finally:
+        con.close()
+
+
+def test_only_verified_fields_set_reliability_and_the_basis_exposes_every_peer_weight():
+    data = small()
+    data[1]['1']['facts']['access']['grade'] = 'beyan'
+    v = estimate(data)
+    assert sum(p['weight_pct'] for p in v['comps']) == pytest.approx(100, abs=0.2)
+    cs = {p['ids'][0]: p for p in v['comps']}
+    assert cs['1']['weight'] < cs['2']['weight']
+    assert cs['1']['grades']['access'] == 'beyan'
+    assert v['low'] <= v['fair'] <= v['high']
+    assert 'eğim' in v['unmodeled'][0]
+
+
+def test_learning_shares_information_across_land_types_and_regions_without_claiming_exact_factors():
+    data = market()
+    v = estimate(data)
+    assert v['tier'] == 'datca' and v['fit_n'] == 108 and v['confidence'] == 'medium'
+    assert v['fair'] == pytest.approx(2200, rel=0.15)
+    assert {p['type'] for p in v['comps']} == set(LAND)
+    by_hood = {p['neighborhood']: p for p in v['comps'] if p['type'] == 'Zeytinlik'}
+    assert by_hood['Mesudiye Mh.']['region_factor'] < 1 < by_hood['Cumalı Mh.']['region_factor']
+    assert estimate(data, area=5000)['fair'] == v['fair']  # identical band membership, identical result
+    assert estimate(data, area=50000)['fair'] is None
+
+
+def test_fit_cannot_confuse_a_type_only_seen_in_one_isolated_hood_with_a_location_premium():
+    data = [], {}, {}
+    add(data, 999)
+    for i in range(1, 26):
+        add(data, i, hood='Yaka', kind='Zeytinlik', rate=2000)
+    for i in range(26, 51):
+        add(data, i, hood='Cumalı', kind='Bademlik', rate=500)
+    v = estimate(data)
+    assert v['fit_n'] == 0 and v['confidence'] == 'low'
+    assert any(p['region_factor'] is None for p in v['comps'])
+
+
+def test_extreme_peer_does_not_pull_the_weighted_median_towards_it():
+    data = market()
+    before = estimate(data)
+    add(data, 200, hood='Cumalı', kind='Tarla', rate=1_000_000)
+    after = estimate(data)
+    assert after['fair'] == pytest.approx(before['fair'], rel=0.05)
+
+
+def test_weak_datca_reference_is_not_labelled_fair_or_strong_and_cannot_boost_score():
+    v = estimate(small())
+    row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
+    shown = listing_view(row, v, 0.5, '', {'value': 'direct'}, True)
+    assert shown['label'] == 'Düşük güven' and shown['opportunity'] == 50 and shown['score'] <= 49
+    assert shown['gap_pct'] == 96
+    assert shown['basis']['method'] == c.METHOD and shown['basis']['confidence'] == 'low'
+    assert shown['basis']['comps'] == v['comps']
+    assert all('çok ucuz' not in cap for cap in shown['caps'])  # must not trigger the manager's "very cheap" recommendation
+    row['price_tl'] = 40_000_000
+    assert listing_view(row, v, 0.5, '', {'value': 'direct'}, True)['opportunity'] == 50
+
+
+def test_medium_confidence_is_at_most_a_possible_opportunity_with_unmodelled_conditions():
+    v = estimate(market())
+    row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
+    assert listing_view(row, v, 0.5, '', {'value': 'direct'}, True)['label'] == 'Olası fırsat'

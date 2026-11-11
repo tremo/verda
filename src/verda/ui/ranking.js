@@ -26,7 +26,7 @@
     // The same judgement the dashboard shows: the label says how the price stands against the fair price, the tooltip says what the fair price rests on.
     if (r.gap_pct != null) out.push([(r.label || 'Adil fiyat') + ' ' + (r.gap_pct >= 0 ? '+' : '−') + '%' + num(Math.abs(r.gap_pct)),
       ['Güçlü fırsat', 'Olası fırsat'].includes(r.label) ? 'ok' : ['Pahalı', 'Adilin üstünde'].includes(r.label) ? 'bad' : '',
-      'Adil ≈ ' + num(r.fair_unit_price) + ' ₺/m² · ' + (r.fair_tier === 'local' ? 'mahallede ' + r.fair_n + ' emsal' : 'bölgesel tahmin (mahallede yeterli emsal yok)')]);
+      'Emsal ≈ ' + num(r.fair_unit_price) + ' ₺/m² · ' + (r.fair_tier === 'datca' ? 'Datça genelinde ' + r.fair_n + ' emsal · ' + (r.fair_confidence === 'low' ? 'düşük güven' : 'orta güven') : r.fair_tier === 'local' ? 'mahallede ' + r.fair_n + ' emsal' : 'bölgesel tahmin (mahallede yeterli emsal yok)')]);
     else out.push(['adil fiyat yok', 'line', r.fair_note || 'Yeterli emsal yok; puan en çok 49']);
     (r.caps || []).forEach(c => out.push([c, 'warn', 'Puanı sınırlayan neden']));
     out.push(r.provisional ? [(r.missing || []).length > 2 ? (r.missing.length + ' eksik') : (r.missing || []).length ? 'eksik: ' + r.missing.map(x => MISSING[x] || x).join(', ') : 'araştırılıyor', 'warn', (r.missing || []).map(x => MISSING[x] || x).join(', ')]

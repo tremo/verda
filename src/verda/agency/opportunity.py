@@ -210,7 +210,7 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
 
 def _basis(estimate):
     """What the fair price rests on, for the dashboard: the step used, the range and the comparables with their links."""
-    out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n')}
+    out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n'), 'size_adjusted': False}
     if estimate.get('low') is not None:
         out['low'], out['high'] = round(estimate['low']), round(estimate['high'])
     for key in ('effect_pct', 'reference'):

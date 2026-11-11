@@ -85,10 +85,19 @@ def attention(store, *, mode='local', now=None, queue=None):
             advice = RATE_LIMIT_NOTE if (i['resource'], i['reason']) in RATE_LIMITED else 'Sorunu giderince kaynağı devam ettirmen gerekir; o zamana kadar bu kaynağın tüm işleri bekler.'
             items.append({'key': 'incident:' + i['id'], 'kind': 'source_blocked', 'severity': ACTION, 'since': i['created_at'], 'ackable': False,
                           'title': f"{i['resource']} erişimi durdu", 'detail': f"Sebep: {i['reason']}. {advice}", 'listings': []})
+        # The same job stopping for the same reason is one topic, however often it happened (on 9 Nov 2026 one inbox task filled 19 of the rows and the
+        # header counted 488 topics). A task already marked as seen stays out; a new stop of the same kind brings the topic back.
+        stopped = {}
         for t in con.execute("SELECT id,agent,objective,state,reason,listing_ref,created_at FROM inbox WHERE mode=? AND state IN ('blocked','uncertain','waiting_user') ORDER BY created_at", (mode,)):
-            items.append({'key': 'task:' + t['id'], 'kind': 'task_stopped', 'severity': ACTION, 'since': t['created_at'], 'ackable': True,
-                          'title': f"{t['agent']} görevi {STATES.get(t['state'], t['state'])}", 'detail': f"{t['objective'][:140]} — {t['reason'] or 'sebep kaydı yok'}",
-                          'listings': [t['listing_ref']] if t['listing_ref'] else []})
+            if 'task:' + t['id'] not in acked:
+                stopped.setdefault((t['agent'], t['state'], t['objective'][:140], t['reason'] or ''), []).append(t)
+        for (agent, state, objective, reason), group in stopped.items():
+            newest = group[-1]
+            listings = sorted({t['listing_ref'] for t in group if t['listing_ref']})
+            items.append({'key': 'task:' + newest['id'] if len(group) == 1 else 'tasks:' + _key(agent, state, objective, reason, newest['id']),
+                          'kind': 'task_stopped', 'severity': ACTION, 'since': newest['created_at'], 'ackable': True,
+                          'title': f"{agent} görevi {STATES.get(state, state)}" + (f" · {len(group)} kez" if len(group) > 1 else ''),
+                          'detail': f"{objective} — {reason or 'sebep kaydı yok'}", 'listings': listings})
         for (tool, subject), v in sorted(_failed_steps(con, now, limit).items()):
             items.append({'key': 'stuck:' + _key(tool, subject, int(v['last_at'] // DAY)), 'kind': 'step_stuck', 'severity': ACTION, 'since': v['last_at'], 'ackable': True,
                           'title': f"{tool} {v['fails']} kez başarısız oldu", 'detail': f"{subject} için son hata: {v['last_error'] or 'bilinmiyor'}. Bu adım artık otomatik denenmiyor; incelemen gerekir.",

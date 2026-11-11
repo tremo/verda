@@ -122,3 +122,27 @@ def test_a_tkgm_rate_limit_is_explained_as_something_to_wait_out_never_to_work_a
     assert tkgm['title'] == 'tkgm erişimi durdu' and 'Sebep: tkgm_http_403.' in tkgm['detail'] and not tkgm['ackable']
     assert 'aşmaya çalışmaz' in tkgm['detail'] and 'bekle' in tkgm['detail'] and 'devam ettir' in tkgm['detail']
     assert 'aşmaya çalışmaz' not in other['detail'] and 'Sebep: captcha.' in other['detail']       # other sources keep the general wording
+
+
+def test_the_same_job_stopping_for_the_same_reason_is_one_topic_and_a_new_stop_brings_it_back(tmp_path):
+    store = _store(tmp_path)
+    for n in range(4):
+        store.submit(agent='sahibinden', objective='Gelen kutusunu eşitle', inputs={}, request_key=f'k{n}', now=10.0 + n)
+    store.submit(agent='sahibinden', objective='Başka bir iş', inputs={}, request_key='other', now=20.0)
+    con = sqlite3.connect(store.path); con.execute('PRAGMA foreign_keys=OFF')
+    with con:
+        con.execute("UPDATE inbox SET state='blocked', reason='read_failed'")
+    con.close()
+    stopped = [i for i in attention(store, now=100.0, queue=QUIET)['items'] if i['kind'] == 'task_stopped']
+    assert sorted(i['title'] for i in stopped) == ['sahibinden görevi durdu', 'sahibinden görevi durdu · 4 kez']
+    group = next(i for i in stopped if '4 kez' in i['title'])
+    assert group['key'].startswith('tasks:') and attention(store, now=100.0, queue=QUIET)['count'] == 2
+    acknowledge(store, group['key'])
+    assert [i['title'] for i in attention(store, now=100.0, queue=QUIET)['items'] if i['kind'] == 'task_stopped'] == ['sahibinden görevi durdu']
+    store.submit(agent='sahibinden', objective='Gelen kutusunu eşitle', inputs={}, request_key='k9', now=50.0)
+    con = sqlite3.connect(store.path); con.execute('PRAGMA foreign_keys=OFF')
+    with con:
+        con.execute("UPDATE inbox SET state='blocked', reason='read_failed' WHERE request_key='k9'")
+    con.close()
+    again = [i['title'] for i in attention(store, now=100.0, queue=QUIET)['items'] if i['kind'] == 'task_stopped']
+    assert 'sahibinden görevi durdu · 5 kez' in again                      # the fifth stop makes it a topic again, with the whole count

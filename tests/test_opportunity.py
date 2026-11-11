@@ -48,7 +48,7 @@ def test_the_panels_ranking_is_computed_once_a_minute_and_the_publisher_ranks_on
     from verda.storage import connect, initialize
     calls = {'n': 0}
 
-    def rank_all(store, mode='local'):
+    def rank_all(store, mode='local', now=None):
         calls['n'] += 1
         return {'ranked': [_ranked_row('1000000001', 97, 72)], 'scatter': 0.5}
     monkeypatch.setattr(opportunity, 'rank_all', rank_all)

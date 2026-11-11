@@ -11,7 +11,7 @@ import math
 import re
 import statistics
 
-from verda.agency import comparables, score as base
+from verda.agency import comparables, score as base, signals
 from verda.facts.text import fold
 
 WEIGHTS = {'opportunity': 0.45, 'purpose': 0.40, 'proximity': 0.15}
@@ -139,8 +139,9 @@ def purpose_fit(kind, area, road, text, sit_known, hood_effect=0.0):
     return round(total), {'investment': round(investment), 'house': round(house), 'production': round(production), 'building_hint': hint, 'water_hint': water, 'power_hint': power}
 
 
-def combine(opportunity, purpose, proximity, price, area, gap_ln, penalties):
-    base = WEIGHTS['opportunity'] * opportunity + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * proximity
+def combine(opportunity, purpose, proximity, price, area, gap_ln, penalties, extra=0):
+    """`extra`: the few points a falling price earns (signals.bonus). They are added before the caps, so they never lift a listing over one."""
+    base = WEIGHTS['opportunity'] * opportunity + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * proximity + extra
     capped = []
     if price and price > IDEAL_BUDGET and (gap_ln is None or gap_ln < -math.log(1 - NEEDED_DISCOUNT_OVER_IDEAL)):
         base = min(base, OVER_IDEAL_CAP); capped.append('bütçe')
@@ -158,16 +159,23 @@ def proximity(route_minutes_max):
     return UNKNOWN_ROUTE if route_minutes_max is None else base.proximity(route_minutes_max)
 
 
-def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False, hood_effect=0.0):
-    """The new numbers for one ranked row (a dict from score.ranking); the old ones are left alone. `estimate`: comparables.Estimator.estimate, or None."""
+def _signals(moved, points):
+    said = signals.describe(moved)
+    return [{'kind': 'price_drop' if moved['change_pct'] < 0 else 'price_rise', 'text': 'fiyat ' + said, 'points': points}] if said else []
+
+
+def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False, hood_effect=0.0, moved=None):
+    """The new numbers for one ranked row (a dict from score.ranking); the old ones are left alone. `estimate`: comparables.Estimator.estimate, or None.
+    `moved`: signals.trend for the listing (how its asking price changed lately), or None."""
     kind, area, price = row['type'], row['area_m2'], row['price_tl']
     road = road_state(access, enclosed)
+    extra = signals.bonus(moved)
     fair = (estimate or {}).get('fair') if kind in LAND and area and price else None
     near = proximity(row['route_minutes_max'])
     basis = _basis(estimate) if estimate else None
     if fair is None:
         purpose, parts = purpose_fit(kind, area or 0, road, text, sit_known)
-        base_score = WEIGHTS['opportunity'] * 50 + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * near     # no price judgement: the middle
+        base_score = WEIGHTS['opportunity'] * 50 + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * near + extra     # no price judgement: the middle
         score, caps = min(49, round(base_score)), []
         taken = sum((row.get('penalties') or {}).values())            # the rule engine's point cuts (second-degree sit, easement) count with or without a price judgement
         if taken:
@@ -175,7 +183,7 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
         if road == ENCLOSED:
             score, caps = max(0, score - ROAD_QUESTION_PENALTY), caps + ['yol: geçiş hakkı sorusu bekliyor −40']
         return {'score': score, 'opportunity': None, 'purpose': purpose, 'proximity': near, 'label': 'Belirsiz', 'road': road,
-                'fair_unit_price': None, 'gap_pct': None, 'caps': caps, 'parts': parts, 'basis': basis}
+                'fair_unit_price': None, 'gap_pct': None, 'caps': caps, 'parts': parts, 'basis': basis, 'signals': _signals(moved, extra)}
     rate = price / area
     gap_ln = math.log(fair / rate)
     purpose, parts = purpose_fit(kind, area, road, text, sit_known, hood_effect)
@@ -184,10 +192,11 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     if gap_ln > TOO_GOOD * scatter:
         # Counted as a strong opportunity and no more until a person has checked the price and the area against the listing and TKGM.
         opp, doubt = min(opp, opportunity_score(scatter)), ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']
+        extra = 0               # a price already too good to believe earns nothing more for having fallen
     if estimate['tier'] == 'region':
         # A regional estimate is only a level: a gap smaller than its own range is not a signal, and never a "strong" one.
         opp = min(opp, opportunity_score(0.5 * scatter))
-    final, capped = combine(opp, purpose, near, price, area, gap_ln, row.get('penalties') or {})
+    final, capped = combine(opp, purpose, near, price, area, gap_ln, row.get('penalties') or {}, extra)
     capped = doubt + capped
     if road == ENCLOSED:
         final, capped = max(0, final - ROAD_QUESTION_PENALTY), capped + ['yol: geçiş hakkı sorusu bekliyor −40']
@@ -195,7 +204,8 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     if estimate['tier'] == 'region' and shown in ('Güçlü fırsat', 'Olası fırsat'):
         shown = 'Adil fiyat'
     return {'score': final, 'opportunity': opp, 'purpose': purpose, 'proximity': near, 'label': shown, 'road': road,
-            'fair_unit_price': round(fair), 'gap_pct': round(100 * (fair - rate) / fair, 1), 'caps': capped, 'parts': parts, 'basis': basis}
+            'fair_unit_price': round(fair), 'gap_pct': round(100 * (fair - rate) / fair, 1), 'caps': capped, 'parts': parts, 'basis': basis,
+            'signals': _signals(moved, extra)}
 
 
 def _basis(estimate):
@@ -230,9 +240,12 @@ def excluded_ids(store, mode='local'):
     return out
 
 
-def rank_all(store, *, mode='local'):
-    """The ranked rows with their new view, best first. Reads facts and listing texts from the records."""
+def rank_all(store, *, mode='local', now=None):
+    """The ranked rows with their new view, best first. Reads facts and listing texts from the records.
+    Each row also carries what the records say beyond the score: `price_trend`, `seller`, the owner's own `mark`, the `parcel` and its `links`."""
     import json
+    import time
+    now = time.time() if now is None else now
     from verda.agency.research import fact_status
     known = {}
 
@@ -259,6 +272,7 @@ def rank_all(store, *, mode='local'):
                 enclosed[r['listing_ref']] = json.loads(r['payload']).get('verdict') == 'all_edges_numbered_neighbors'
             except ValueError:
                 pass
+    histories, who, marks = signals.price_history(store, mode), signals.sellers(store, mode), signals.user_marks(store)
     out = []
     for row in ranked:
         current = status(row['listing_id'])
@@ -268,7 +282,18 @@ def rank_all(store, *, mode='local'):
         estimate = None if 'sale_scope' in (current.get('conflicts') or []) else estimator.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'])
         effect = estimator.effects.get(hood_of(row['neighborhood']), mean_effect) - mean_effect       # the neighbourhood against the island's average
         shut = enclosed.get(row['listing_id'], False) and (current.get('seen') or {}).get('corridor_enclosed', True)    # False for a several-deed sale
-        out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, effect)})
+        moved = signals.trend(histories.get(row['listing_id']), now)
+        parcel = facts.get('parcel_key')
+        out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, effect, moved),
+                    'price_trend': moved, 'seller': who.get(row['listing_id']), 'mark': marks.get(row['listing_id']),
+                    'parcel': parcel.get('value') if isinstance(parcel, dict) else None, 'links': current.get('links') or {}})
+    offices = {}
+    for r in out:                                           # how many of the candidates one office is selling
+        if (r['seller'] or {}).get('store'):
+            offices[r['seller']['store']] = offices.get(r['seller']['store'], 0) + 1
+    for r in out:
+        if (r['seller'] or {}).get('store'):
+            r['seller'] = {**r['seller'], 'listings': offices[r['seller']['store']]}
     out.sort(key=lambda r: -r['new']['score'])
     return {'ranked': out, 'scatter': scatter}
 
@@ -287,6 +312,6 @@ def one_ranking(store, args=None, *, mode='local'):
         new, basis = r['new'], r['new'].get('basis') or {}
         rows.append({**{k: v for k, v in r.items() if k != 'new'}, 'score': new['score'], 'purchase_score': r['score'], 'label': new['label'], 'gap_pct': new['gap_pct'],
                      'fair_unit_price': new['fair_unit_price'], 'fair_tier': basis.get('tier'), 'fair_n': basis.get('n'), 'fair_note': basis.get('note'),
-                     'road': new['road'], 'caps': new['caps'],
+                     'road': new['road'], 'caps': new['caps'], 'signals': new.get('signals') or [],
                      'parts': {'opportunity': new['opportunity'], 'purpose': new['purpose'], 'proximity': new['proximity'], **new['parts']}})
     return {'ranked': rows[:limit], 'total': len(rows), 'settled': sum(not r['provisional'] for r in rows), 'note': NOTE}

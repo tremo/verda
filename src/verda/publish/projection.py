@@ -88,7 +88,17 @@ def parcel_shape(store, listing_id, mode='local', parcels=None):
 def opp_view(new):
     """The opportunity score's numbers for the dashboard: what it says and why."""
     return {'score': new['score'], 'opportunity': new['opportunity'], 'purpose': new['purpose'], 'proximity': new['proximity'], 'label': new['label'], 'gapPct': new['gap_pct'],
-            'fairUnitPrice': new['fair_unit_price'], 'road': new['road'], 'caps': new['caps'], 'parts': new['parts'], 'basis': new.get('basis')}
+            'fairUnitPrice': new['fair_unit_price'], 'road': new['road'], 'caps': new['caps'], 'parts': new['parts'], 'basis': new.get('basis'),
+            'signals': new.get('signals') or []}
+
+
+def trend_view(moved):
+    """How the asking price moved lately, for the dashboard (None when it did not)."""
+    from verda.agency import signals
+    if not moved:
+        return None
+    return {'from': moved['from'], 'to': moved['to'], 'changePct': moved['change_pct'], 'drops': moved['drops'], 'rises': moved['rises'], 'sinceDays': moved['since_days'],
+            'lastChangeAt': iso(moved['last_change_at']), 'text': signals.describe(moved), 'steps': [{'at': iso(at), 'price': price} for at, price in moved['steps']]}
 
 
 def sale_parcels_view(store, listing_id, current, mode='local'):
@@ -140,6 +150,7 @@ def listing_document(store, row, now_iso, *, mode='local', new=None):
         'thread': thread_of(store, row['listing_id'], mode),
         'proposals': proposals_of(store, row['listing_id'], mode),
         'opp': opp_view(new) if new else None,
+        'priceTrend': trend_view(row.get('price_trend')), 'seller': row.get('seller'),
         'areaConflict': area_conflict(current),
         'parcels': sale_parcels_view(store, row['listing_id'], current, mode),
         'photos': photo_ids(store, row['listing_id'], mode),
@@ -195,7 +206,7 @@ def build(store, *, mode='local', now=None, limit=1000):
     problems = []
     try:
         # One pass: the opportunity ranking is built on the older ranking's rows and hands them back, so the older one is not computed a second time.
-        both = opportunity.rank_all(store, mode=mode)['ranked'][:limit]
+        both = opportunity.rank_all(store, mode=mode, now=now)['ranked'][:limit]
         newer = {r['listing_id']: r['new'] for r in both}
         rows = [{k: v for k, v in r.items() if k != 'new'} for r in both]
         ranked = {'ranked': rows, 'total': len(rows), 'settled': sum(not r['provisional'] for r in rows)}
@@ -204,7 +215,7 @@ def build(store, *, mode='local', now=None, limit=1000):
         where = traceback.extract_tb(error.__traceback__)[-1]
         problems.append(f"Fırsat puanı hesaplanamadı ({type(error).__name__} · {where.name}:{where.lineno}); pano eski puanı gösteriyor")
         print('opportunity.rank_all failed:', type(error).__name__, f'{where.filename}:{where.lineno}', file=sys.stderr, flush=True)
-        newer, ranked = {}, ranking(store, {'limit': limit}, mode=mode)
+        newer, ranked, both = {}, ranking(store, {'limit': limit}, mode=mode), None
     docs = [(COLLECTION, row['listing_id'], listing_document(store, row, now_iso, mode=mode, new=newer.get(row['listing_id']))) for row in ranked['ranked']]
     docs += closed_documents(store, {d[1] for d in docs}, now_iso, mode=mode)
     by_state = {}
@@ -214,6 +225,16 @@ def build(store, *, mode='local', now=None, limit=1000):
         scanned = con.execute("SELECT max(captured_at) FROM observations WHERE tool='sahibinden.search' AND mode=?", (mode,)).fetchone()[0]
     status = {'generatedAt': now_iso, 'recordCount': len(docs), 'byState': by_state, 'total': ranked['total'], 'settled': ranked['settled'], 'schemaVersion': 1,
               'lastScanAt': iso(scanned)}           # the dashboard's header says when listings were last searched, not only when this was written
+    if both is not None:
+        try:                                         # today's few decisions travel with the header document; a failure here never stops the listings
+            from verda.agency import decisions
+            picked = decisions.today(store, mode=mode, now=now, ranked=both)
+            status['decisions'] = {'items': picked['items'], 'counts': picked['counts']}
+        except Exception as error:
+            import sys, traceback
+            where = traceback.extract_tb(error.__traceback__)[-1]
+            problems.append(f"Günün kararları hesaplanamadı ({type(error).__name__} · {where.name}:{where.lineno})")
+            print('decisions.today failed:', type(error).__name__, f'{where.filename}:{where.lineno}', file=sys.stderr, flush=True)
     from verda.publish import status as status_page
     return docs + [('meta', 'v2', status), ('meta', 'v2status', status_page.build(store, mode=mode, now=now, problems=problems))]
 

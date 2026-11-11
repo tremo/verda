@@ -1,160 +1,288 @@
-"""Fair price from comparables, in three steps that say which one they used.
+"""Datça asking-price comparables. Deterministic, explainable, no area price coefficient.
 
-1. Local: parcels of the same type in the same neighbourhood, from half to twice the size, with a road we know about. Their unadjusted asking prices
-   per m2 give the fair price (median) and the usual range (quartiles). Needs MIN_LOCAL of them.
-2. Regional: too few local ones. A log-linear fit (type + neighbourhood) over the parcels whose road is not known to be missing gives the
-   neighbourhood's level relative to the others; the fair price is its prediction, with a range from how far asking prices scatter. Wider and labelled so.
-3. None: the neighbourhood or the size is outside what the data covers. No number is made up.
+Current accepted facts qualify parcels; unknown access/title/sit/sale scope is not a
+negative fact. Direct access and easements, and different sit states, never mix.
+One parcel is one observation, even under several ads. The subject and overlapping
+sale packages are absent from BOTH comparables and coefficient learning.
 
-Road: only parcels with a road we know about (cadastral road, easement) are local comparables; a parcel known to lack one is in neither step.
+The same 0.5–2 area band supplies the median and the optional regularized location /
+type fit. With insufficient support, raw Datça prices remain a LOW-CONFIDENCE
+reference, not an assertion that neighbourhoods or agricultural types cost the same.
+All weights and thresholds below are explicit policy choices, not learned discounts.
 """
-import json
+from collections import Counter
 import math
+import re
 import statistics
 
-MIN_LOCAL = 4
+from verda.facts.text import fold
+
+METHOD = 'datca-comparables-v1'
 SIZE_BAND = (0.5, 2.0)
-MIN_HOOD_ROWS = 5                # fewer rows than this and the neighbourhood's level is not estimated
-RANGE_OF_DATA = (0.5, 2.0)       # the regional fit is not stretched past half the smallest or twice the largest parcel it has seen, per type
-ROAD_OK, ROAD_BAD = 'ok', 'bad'
+MIN_COMPS = 3
+MIN_FIT = 20
+MIN_HOOD_ROWS = 3
+HOOD_PENALTY, TYPE_PENALTY = 3.0, 6.0
+PROFILE_FIELDS = ('access', 'shared_title', 'natural_sit', 'archaeological_sit')
+CRITICAL = (*PROFILE_FIELDS, 'price_tl', 'sale_area_m2', 'parcel_area_m2', 'sale_scope', 'sale_scope_resolved', 'sale_parcels', 'parcel_identity', 'property_type')
+GRADE_WEIGHT = {'kullanici': 1.0, 'resmi': 1.0, 'bagimsiz': 0.9, 'beyan': 0.7}
+UNMODELED = ['Su, elektrik, eğim, manzara ve yapılaşma koşulları bu hesapta eşitlenmedi.']
+REASONS = {
+    'identity': 'Parsel kimliği bilinmiyor', 'conflict': 'Kayıtlarda çelişki var',
+    'scope': 'Satılan alan ve satış kapsamı kesinleşmemiş', 'price': 'Güncel fiyat veya alan bilinmiyor', 'type': 'Nitelik bilinmiyor',
+    'access': 'Doğrudan yol erişimi veya mevcut geçiş hakkı kesinleşmemiş',
+    'title': 'Hisseli tapu veya tapu durumu bilinmiyor', 'sit': 'Sit durumu eksik veya karşılaştırmaya uygun değil',
+    'removed': 'İlan kaldırılmış veya kullanıcı tarafından elenmiş', 'stale': 'Fiyat 180 günden eski',
+    'duplicate_conflict': 'Aynı parselin ilanlarında kapsam veya özellik çelişkisi var',
+    'subject': 'İlanın kendisi veya aynı parselin diğer ilanı',
+    'conditions': 'Yol veya sit koşulları farklı', 'size': 'Benzer büyüklük bandının dışında',
+}
 
 
-def roads(store, peers, statuses):
-    """Sets peer['road'] to 'ok', 'bad' or None (unknown). `statuses`: listing id -> fact status for the listings this system has looked at.
-    The old archive's neighbour-access checks fill the rest; one parcel with several listings is bad if any says so."""
-    legacy = _legacy_roads(store)
-    for peer in peers:
-        seen = set()
-        for listing in peer['ids']:
-            access = (((statuses.get(listing) or {}).get('facts') or {}).get('access') or {}).get('value')
-            if access in ('direct', 'existing_easement'):
-                seen.add(ROAD_OK)
-            elif access in ('none', 'absent', 'no_access'):
-                seen.add(ROAD_BAD)
-            if legacy.get(listing):
-                seen.add(legacy[listing])
-        peer['road'] = ROAD_BAD if ROAD_BAD in seen else ROAD_OK if ROAD_OK in seen else None
+def neighborhood(name):
+    name = fold(str(name or '')).strip()
+    name = re.sub(r'^(koyler)[ /:>-]*', '', name)
+    return re.sub(r'\s+(mh\.?|mah\.?|mahallesi)$', '', name).strip()
+
+
+def parcel_keys(row, current):
+    raw = current.get('parcels') or [row.get('parcel')]
+    out = set()
+    for value in raw:
+        match = re.fullmatch(r'(?:(.+):)?\s*(\d+)\s*/\s*(\d+)\s*', str(value or ''))
+        if match:
+            hood = neighborhood(match[1] or row.get('neighborhood'))
+            if hood:
+                out.add(f'{hood}:{int(match[2])}/{int(match[3])}')
+    return out
+
+
+def price_dates(store, mode):
+    """Age of the accepted price's actual observation, not the date of a later reimport."""
+    with store.transaction() as con:
+        rows = con.execute("""SELECT c.id, c.created_at, c.source_kind, o.tool, o.captured_at
+            FROM claims c LEFT JOIN observations o ON o.id=c.observation_id AND o.mode=c.mode
+            WHERE c.field='price_tl' AND c.mode=? AND c.status='accepted'""", (mode,)).fetchall()
+    return {r['id']: (r['captured_at'] if r['tool'] in ('sahibinden.search', 'sahibinden.read_listing', 'sahibinden.read_thread')
+                      else r['created_at'] if r['source_kind'] == 'user' else None) for r in rows}
+
+
+def profile(row, current, dates, now):
+    facts = {k: v for k, v in (current.get('facts') or {}).items() if isinstance(v, dict)}
+    values = {k: v.get('value') for k, v in facts.items()}
+    issues = []
+    keys = parcel_keys(row, current)
+    if not keys:
+        issues.append('identity')
+    if set(current.get('conflicts') or []) & set(CRITICAL):
+        issues.append('conflict')
+    if values.get('sale_scope_resolved') is not True:
+        issues.append('scope')
+    if not values.get('property_type'):
+        issues.append('type')
+    if values.get('access') not in ('direct', 'existing_easement'):
+        issues.append('access')
+    if values.get('shared_title') is not False:
+        issues.append('title')
+    if values.get('natural_sit') not in ('none', 'second_degree', 'third_degree', 'archival_exception') or values.get('archaeological_sit') is not False:
+        issues.append('sit')
+    if (current.get('seen') or {}).get('listing_removed') or values.get('user_excluded') is True:
+        issues.append('removed')
+    price, area = values.get('price_tl'), values.get('sale_area_m2')
+    if not all(isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 for v in (price, area)):
+        issues.append('price')
+        price = area = None
+    # A legacy row may have numbers, but cannot silently supply an unknown current fact.
+    at = dates.get((facts.get('price_tl') or {}).get('claim_id'))
+    age = max(0, (now - at) / 86400) if at is not None and at <= now + 86400 else None
+    if age is not None and age > 180:
+        issues.append('stale')
+    grades = {k: facts[k].get('grade') for k in PROFILE_FIELDS if k in facts}
+    quality = min((GRADE_WEIGHT.get(g, 0.5) for g in grades.values()), default=0.5)
+    freshness = 0.5 if age is None else 1.0 if age <= 90 else 0.75
+    return {**row, 'ids': {row['id']}, 'parcels': keys, 'hood': neighborhood(row.get('neighborhood')),
+            'area': area, 'rate': price / area if price and area else None,
+            'conditions': {k: values.get(k) for k in PROFILE_FIELDS}, 'issues': issues,
+            'quality': quality, 'freshness': freshness, 'grades': grades, 'age_days': round(age, 1) if age is not None else None}
+
+
+def prepare(rows, statuses, dates, now):
+    """Consolidate connected parcel identities, including overlapping multi-parcel sales.
+    Unknown old aliases count for self-exclusion but never add an unverified price.
+    Different packages sharing a parcel are ambiguous, not independent observations.
+    """
+    profiles = [profile(r, statuses.get(r['id']) or {}, dates, now) for r in rows]
+    groups, owners = {}, {}
+    for p in profiles:
+        hits = {owners[k] for k in p['parcels'] if k in owners}
+        root = min(hits) if hits else p['id']
+        group = groups.setdefault(root, [])
+        for other in hits - {root}:
+            group.extend(groups.pop(other))
+        group.append(p)
+        for member in group:
+            for key in member['parcels']:
+                owners[key] = root
+    peers = []
+    for group in groups.values():
+        good = [p for p in group if not p['issues']]
+        chosen = good or group
+        conflict = any('conflict' in p['issues'] for p in group) or any(
+            len({p['conditions'][f] for p in group if p['conditions'][f] is not None}) > 1 for f in PROFILE_FIELDS)
+        sets = {tuple(sorted(p['parcels'])) for p in group if p['parcels']}
+        if len(sets) > 1 or (good and max(p['area'] for p in good) / min(p['area'] for p in good) > 1.02):
+            conflict = True
+        if len({p['type'] for p in good}) > 1:
+            conflict = True
+        issues = ['duplicate_conflict'] if conflict else [] if good else list(dict.fromkeys(i for p in group for i in p['issues']))
+        peers.append({**chosen[0], 'ids': set().union(*(p['ids'] for p in group)), 'parcels': set().union(*(p['parcels'] for p in group)),
+                      'rate': statistics.median(p['rate'] for p in good) if good else chosen[0]['rate'],
+                      'area': statistics.median(p['area'] for p in good) if good else chosen[0]['area'],
+                      'quality': min(p['quality'] for p in chosen), 'freshness': min(p['freshness'] for p in chosen),
+                      'grades': {f: min((p['grades'].get(f) for p in chosen), key=lambda g: GRADE_WEIGHT.get(g, 0.5)) for f in PROFILE_FIELDS},
+                      'age_days': max(p['age_days'] for p in chosen) if all(p['age_days'] is not None for p in chosen) else None,
+                      'issues': issues})
     return peers
 
 
-def _legacy_roads(store):
-    from verda.agency.research import archive_connection
-    archive = archive_connection(store)
-    if not archive:
-        return {}
-    out = {}
-    try:
-        snapshot = archive.execute('SELECT id FROM legacy_snapshots ORDER BY imported_at DESC LIMIT 1').fetchone()
-        if not snapshot:
-            return {}
-        for row in archive.execute("SELECT payload FROM legacy_rows WHERE table_name='checks' AND snapshot_id=?", (snapshot['id'],)):
-            check = json.loads(row['payload'])
-            if check.get('kind') == 'neighbor_access':
-                status = str(check.get('status') or '')
-                out[check['item_id']] = ROAD_OK if status.startswith('verified') else ROAD_BAD if status == 'excluded_by_statement' else None
-        for row in archive.execute("SELECT subject_id,payload FROM legacy_rows WHERE table_name='items' AND snapshot_id=?", (snapshot['id'],)):
-            item = json.loads(row['payload'])
-            reason = str(json.loads(item.get('legacy_json') or '{}').get('exclusion_reason') or '')
-            if item.get('lifecycle') == 'excluded' and 'road_absent' in reason:
-                out[row['subject_id']] = ROAD_BAD
-    finally:
-        archive.close()
-    return {k: v for k, v in out.items() if v}
+def quantile(values, q):
+    """Weighted midpoint-CDF interpolation; equal weights give the ordinary median."""
+    ordered = sorted(values)
+    total, cumulative, points = sum(w for _, w in ordered), 0.0, []
+    for value, weight in ordered:
+        points.append(((cumulative + weight / 2) / total, value))
+        cumulative += weight
+    if q <= points[0][0]:
+        return points[0][1]
+    for (a, x), (b, y) in zip(points, points[1:]):
+        if q <= b:
+            return x + (y - x) * (q - a) / (b - a)
+    return points[-1][1]
 
 
-def _pct(effect):
-    value = round(100 * (math.exp(effect) - 1))
-    return f'%{value}' if value >= 0 else f'−%{-value}'
+def _fit(pool, target, kind, solve):
+    """Robust ridge fit to log asking price: type + neighbourhood ONLY.
+    No fit without a connected type/hood graph: otherwise the two effects cannot be
+    separated. Penalties shrink sparse effects towards 1; they are policy constants.
+    """
+    counts = Counter(p['hood'] for p in pool)
+    kinds = sorted({p['type'] for p in pool})
+    hoods = sorted(counts)
+    width = 1 + len(hoods) + len(kinds)
+    if len(pool) < max(MIN_FIT, 2 * width) or counts[target] < MIN_HOOD_ROWS or sum(p['type'] == kind for p in pool) < MIN_HOOD_ROWS or len(hoods) < 2:
+        return None
+    graph = {}
+    for p in pool:
+        h, k = 'h:' + p['hood'], 'k:' + p['type']
+        graph.setdefault(h, set()).add(k)
+        graph.setdefault(k, set()).add(h)
+    reached, todo = set(), [next(iter(graph))]
+    while todo:
+        v = todo.pop()
+        if v not in reached:
+            reached.add(v)
+            todo.extend(graph[v] - reached)
+    if len(reached) < len(graph):
+        return None
+    xs = [[1.0] + [float(p['hood'] == h) for h in hoods] + [float(p['type'] == k) for k in kinds] for p in pool]
+    ys = [math.log(p['rate']) for p in pool]
+    weights = [p['quality'] * p['freshness'] for p in pool]
+    robust = [1.0] * len(pool)
+    for _ in range(4):
+        A, b = [[0.0] * width for _ in range(width)], [[0.0] for _ in range(width)]
+        for x, y, weight, down in zip(xs, ys, weights, robust):
+            for i in range(width):
+                b[i][0] += weight * down * x[i] * y
+                for j in range(width):
+                    A[i][j] += weight * down * x[i] * x[j]
+        for i in range(1, width):
+            A[i][i] += HOOD_PENALTY if i <= len(hoods) else TYPE_PENALTY
+        w = [r[0] for r in solve(A, b)]
+        residuals = [y - sum(a * v for a, v in zip(w, x)) for x, y in zip(xs, ys)]
+        center = statistics.median(residuals)
+        scale = max(0.2, 1.4826 * statistics.median(abs(r - center) for r in residuals))
+        robust = [min(1.0, 1.5 * scale / max(abs(r - center), 1e-9)) for r in residuals]
+    return {'hood': dict(zip(hoods, w[1:1 + len(hoods)])), 'type': dict(zip(kinds, w[1 + len(hoods):])),
+            'n': len(pool), 'scatter': scale}
 
 
 class Estimator:
-    """Built once per ranking from the peers (dicts with type, area, rate, neighborhood, ids, road)."""
-
     def __init__(self, peers, hood_of, lands, solve):
-        self.hood_of, self.lands = hood_of, lands
-        rows = [(p, hood_of(p['neighborhood'])) for p in peers
-                if p['type'] in lands and p.get('neighborhood') and p['area'] > 0 and p['rate'] > 0 and p.get('road') != ROAD_BAD]
-        self.rows = rows
-        self.sigma, self.effects, self.kinds, self.leverage_shift = 0.5, {}, [], {}
-        self.reference = None
-        self.span = {}
-        self.w, self.others, self.hoods = None, [], set()
-        self._fit(solve)
-
-    def _fit(self, solve):
-        rows = self.rows
-        count = {}
-        for _, hood in rows:
-            count[hood] = count.get(hood, 0) + 1
-        hoods = sorted(h for h, n in count.items() if n >= MIN_HOOD_ROWS)
-        if len(rows) < 30 or len(hoods) < 2:
-            return
-        self.reference = max(hoods, key=lambda h: count[h])
-        others = [h for h in hoods if h != self.reference]
-        self.kinds = [k for k in ('Zeytinlik', 'Bademlik') if any(p['type'] == k for p, _ in rows)]
-        fit_rows = [(p, h) for p, h in rows if h in hoods]
-        width = 1 + len(self.kinds) + len(others)
-        A = [[0.0] * width for _ in range(width)]
-        b = [0.0] * width
-        xs = []
-        for p, h in fit_rows:
-            x = self._features(p['type'], h, others)
-            y = math.log(p['rate'])
-            xs.append((x, y, p))
-            for i in range(width):
-                b[i] += x[i] * y
-                for j in range(width):
-                    A[i][j] += x[i] * x[j]
-        for i in range(width):
-            A[i][i] += 1e-6
-        inverse = solve(A, [[1.0 if i == j else 0.0 for j in range(width)] for i in range(width)])
-        w = [sum(inverse[i][j] * b[j] for j in range(width)) for i in range(width)]
-        self.w, self.others, self.hoods = w, others, set(hoods)
-        self.effects = {self.reference: 0.0, **{h: w[1 + len(self.kinds) + i] for i, h in enumerate(others)}}
-        residuals = [y - sum(wi * xi for wi, xi in zip(w, x)) for x, y, _ in xs]
-        self.sigma = max(0.2, statistics.pstdev(residuals))
-        for x, y, p in xs:                                    # a listing is judged without its own row (leave-one-out, exact for this linear fit)
-            leverage = sum(x[i] * sum(inverse[i][j] * x[j] for j in range(width)) for i in range(width))
-            if leverage < 0.95:
-                shift = (sum(wi * xi for wi, xi in zip(w, x)) - y) * leverage / (1 - leverage)
-                for listing in p['ids']:
-                    self.leverage_shift[listing] = shift
-        for p, _ in fit_rows:
-            lo, hi = self.span.get(p['type'], (p['area'], p['area']))
-            self.span[p['type']] = (min(lo, p['area']), max(hi, p['area']))
-
-    def _features(self, kind, hood, others):
-        return [1.0] + [1.0 if kind == k else 0.0 for k in self.kinds] + [1.0 if hood == h else 0.0 for h in others]
+        self.rows = [p for p in peers if p['type'] in lands]
+        self.by_id = {i: p for p in peers for i in p['ids']}
+        self.lands, self.solve = lands, solve
+        self.sigma = 0.5
+        # Kept for the separate purpose-fit component. This change introduces no new
+        # area/type/region premium into the user's investment preferences.
+        self.effects = {}
 
     def estimate(self, kind, area, hood, listing=None):
-        """-> {tier: local|region|none, fair (TL/m2), low, high, n, comps, note}."""
-        hood = self.hood_of(hood)
-        if kind not in self.lands or not area or not hood:
-            return {'tier': 'none', 'fair': None, 'note': 'Tür, alan ya da mahalle bilinmiyor'}
+        subject, hood = self.by_id.get(listing), neighborhood(hood)
+        base = {'method': METHOD, 'size_adjusted': False, 'tier': 'none', 'fair': None, 'n': 0, 'comps': [],
+                'confidence': 'insufficient', 'unmodeled': UNMODELED, 'exclusions': [], 'warnings': []}
+        if kind not in self.lands or not area or area <= 0 or not hood or subject is None:
+            return {**base, 'note': 'Tür, alan, mahalle veya güncel parsel kaydı eksik.'}
+        if subject['issues']:
+            return {**base, 'note': 'Bu ilan için hesap bekliyor: ' + '; '.join(REASONS[i] for i in subject['issues']) + '.',
+                    'subject_issues': subject['issues']}
+        counts, pool = Counter(), []
+        for p in self.rows:
+            reason = ('subject' if p['parcels'] & subject['parcels'] or listing in p['ids'] else
+                      p['issues'][0] if p['issues'] else
+                      'conditions' if p['conditions'] != subject['conditions'] else
+                      'size' if not SIZE_BAND[0] * area <= p['area'] <= SIZE_BAND[1] * area else None)
+            if reason:
+                counts[reason] += 1
+            else:
+                pool.append(p)
+        base.update(n=len(pool), exclusions=[{'reason': k, 'label': REASONS[k], 'n': n} for k, n in sorted(counts.items())])
+        fit = _fit(pool, hood, kind, self.solve)
         comps = []
-        for p, h in self.rows:
-            if h != hood or p['type'] != kind or p.get('road') != ROAD_OK or listing in p['ids']:
-                continue
-            if SIZE_BAND[0] * area <= p['area'] <= SIZE_BAND[1] * area:
-                comps.append({'ids': sorted(p['ids']), 'rate': p['rate'], 'area': round(p['area'])})
-        rates = sorted(c['rate'] for c in comps)
+        for p in pool:
+            same_hood, same_type = p['hood'] == hood, p['type'] == kind
+            hf = math.exp(fit['hood'][hood] - fit['hood'][p['hood']]) if fit else 1.0
+            tf = math.exp(fit['type'][kind] - fit['type'][p['type']]) if fit and kind in fit['type'] else 1.0
+            weight = p['quality'] * p['freshness'] * (2.0 if same_hood else 1.0) * (1.25 if same_type else 1.0)
+            comps.append({'ids': sorted(p['ids']), 'neighborhood': p['neighborhood'], 'type': p['type'],
+                          'area': round(p['area'], 2), 'rate': round(p['rate'], 2), 'adjusted': p['rate'] * hf * tf,
+                          'region_factor': hf if fit or same_hood else None,
+                          'type_factor': tf if (fit and kind in fit['type']) or same_type else None,
+                          'weight': weight, 'age_days': p['age_days'], 'grades': p['grades'],
+                          'same_neighborhood': same_hood, 'same_type': same_type})
+        total = sum(c['weight'] for c in comps)
         for c in comps:
-            c['rate'] = round(c['rate'])
-            c['adjusted'] = c['rate']                         # compatibility with cached dashboard clients; no price adjustment
-        if len(comps) >= MIN_LOCAL:
-            quartiles = statistics.quantiles(rates, n=4, method='inclusive')
-            comps.sort(key=lambda c: abs(math.log(c['area'] / area)))
-            return {'tier': 'local', 'fair': statistics.median(rates), 'low': quartiles[0], 'high': quartiles[2], 'n': len(comps), 'comps': comps[:12],
-                    'note': f'{hood} mahallesinde, yolu bilinen {len(comps)} benzer parselin (yarım ile iki katı büyüklük) m² fiyatlarının ortancası; büyüklük çarpanı uygulanmaz'}
-        if not self.effects or hood not in self.hoods:
-            return {'tier': 'none', 'fair': None, 'n': len(comps), 'comps': comps, 'note': f'{hood} için yeterli emsal ve bölge katsayısı yok'}
-        low, high = self.span.get(kind, (None, None))
-        if low is None or not RANGE_OF_DATA[0] * low <= area <= RANGE_OF_DATA[1] * high:
-            return {'tier': 'none', 'fair': None, 'n': len(comps), 'comps': comps, 'note': 'Parsel, verideki büyüklük aralığının çok dışında'}
-        w = self.w
-        x = self._features(kind, hood, self.others)
-        value = sum(wi * xi for wi, xi in zip(w, x)) + self.leverage_shift.get(listing, 0.0)
-        return {'tier': 'region', 'fair': math.exp(value), 'low': math.exp(value - self.sigma), 'high': math.exp(value + self.sigma), 'n': len(comps),
-                'comps': [{k: v for k, v in c.items() if k != 'adjusted'} for c in comps],
-                'effect_pct': round(100 * (math.exp(self.effects[hood]) - 1)), 'reference': self.reference,
-                'note': f'{hood} için aynı mahallede yeterli emsal yok ({len(comps)}); bölge katsayısıyla tahmin ({self.reference}\'ye göre {_pct(self.effects[hood])}); büyüklük çarpanı uygulanmaz'}
+            c['weight_pct'] = round(100 * c['weight'] / total, 1)
+        comps.sort(key=lambda c: (-c['weight'], c['ids']))
+        base['comps'] = [{**c, 'adjusted': round(c['adjusted'], 2), 'weight': round(c['weight'], 4),
+                          'region_factor': round(c['region_factor'], 4) if c['region_factor'] is not None else None,
+                          'type_factor': round(c['type_factor'], 4) if c['type_factor'] is not None else None} for c in comps]
+        if len(comps) < MIN_COMPS:
+            return {**base, 'note': f'Datça genelinde aynı yol/sit/tapu koşullarında {len(comps)} bağımsız emsal var; en az {MIN_COMPS} gerekli.'}
+        warnings = []
+        if any(c['region_factor'] is None for c in comps):
+            warnings.append('Mahalle farkını öğrenmek için veri yetersiz; rakam Datça referansıdır, bu mahallenin değerlemesi değildir.')
+        if any(c['type_factor'] is None for c in comps):
+            warnings.append('Tarla, zeytinlik ve bademlik arasındaki fiyat farkı yeterince ölçülemedi; otomatik tür primi uygulanmadı.')
+        if any(c['age_days'] is None for c in comps) or subject['age_days'] is None:
+            warnings.append('Bazı fiyatların gözlem tarihi bilinmiyor.')
+        if any(c['age_days'] is not None and c['age_days'] > 90 for c in comps) or (subject['age_days'] or 0) > 90:
+            warnings.append('90 günden eski fiyatlar var.')
+        effective = total ** 2 / sum(c['weight'] ** 2 for c in comps)
+        confidence = 'low' if warnings or len(comps) < 6 or effective < 5 else 'medium'
+        if len(comps) < 6 or effective < 5:
+            warnings.append('Bağımsız emsal sayısı veya ağırlık dengesi sınırlı.')
+        values = [(c['adjusted'], c['weight']) for c in comps]
+        fair = quantile(values, 0.5)
+        logs = [(abs(math.log(c['adjusted'] / fair)), c['weight']) for c in comps]
+        scatter = max(0.2, 1.4826 * quantile(logs, 0.5))
+        if scatter > 0.6:
+            confidence = 'low'
+            warnings.append('Emsal fiyatları çok dağınık.')
+        return {**base, 'tier': 'datca', 'fair': fair, 'low': quantile(values, 0.25), 'high': quantile(values, 0.75),
+                'confidence': confidence, 'effective_n': round(effective, 1), 'scatter': scatter, 'warnings': warnings,
+                'fit_n': fit['n'] if fit else 0, 'conditions': subject['conditions'],
+                'note': f'Datça genelindeki {len(comps)} bağımsız parselin ağırlıklı m² ilan fiyatı ortancası. '
+                        'Aynı mahalle ×2, aynı tür ×1,25; beyan içeren özellikler ×0,7, bağımsız ölçüm ×0,9. '
+                        'Fiyat 90–180 günlükse ×0,75, tarihi bilinmiyorsa ×0,5. '
+                        'Büyüklük yalnız 0,5–2 kat emsal seçme bandıdır; fiyat çarpanı yok. '
+                        + ('Mahalle ve tür farkları bu emsal grubundan öğrenilerek düzeltildi.' if fit else 'Mahalle/tür fiyat düzeltmesi uygulanmadı.')}

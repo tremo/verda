@@ -467,7 +467,7 @@
     {
       "key": "listings.rank",
       "label": "İlan sıralaması",
-      "description": "Elenmemiş ilanları fırsat puanına göre sıralar (panoda görünen puanın aynısı): adil fiyata göre fark %45, amaca uygunluk %40, Mertur yakınlığı %15; sit ve geçiş hakkı cezaları düşülür. Her satırda label (Güçlü fırsat, Adil fiyat…), gap_pct, fair_unit_price, fair_tier (local: mahalle emsali, region: bölgesel tahmin), road ve caps (puanı sınırlayan nedenler) gelir. Kesinleşmemiş olgular varsa puan geçici işaretlenir. Adil fiyat ilan fiyatlarına dayalı tahmindir, resmî değerleme değildir. Siteye istek yapmaz.",
+      "description": "Elenmemiş ilanları fırsat puanına göre sıralar (panoda görünen puanın aynısı): adil fiyata göre fark %45, amaca uygunluk %40, Mertur yakınlığı %15; sit ve geçiş hakkı cezaları düşülür. Her satırda label (Güçlü fırsat, Adil fiyat…), gap_pct, fair_unit_price, fair_tier (datca: Datça genelinden emsal referansı, none: hesap yok), fair_confidence (low: düşük, medium: orta, insufficient: yetersiz), fair_warnings (emsal hesabındaki belirsizlikler), road ve caps (puanı sınırlayan nedenler) gelir. Kesinleşmemiş olgular varsa puan geçici işaretlenir. Emsal referansı ilan fiyatlarına dayanır, gerçekleşmiş satış veya resmî değerleme değildir. Düşük güvende fiyat avantajı puana eklenmez ve puan en çok 49 olur. Büyüklük fiyat çarpanı uygulanmaz. Siteye istek yapmaz.",
       "transport": "python",
       "input_schema": {
         "type": "object",

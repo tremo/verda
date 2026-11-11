@@ -333,12 +333,18 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
     def ranking_page():
         return FileResponse(assets / "ranking.html", headers={"Cache-Control": "no-store"})
 
+    ranking_cache = {"at": 0.0, "value": None}
+
     @app.get("/control/private/ranking", dependencies=[Depends(viewer)])
-    def ranking_data(limit: int = Query(default=50, ge=1, le=200)):
+    def ranking_data(limit: int = Query(default=50, ge=1, le=200), fresh: bool = False):
         if agency_store is None:
             raise HTTPException(503, "Agency not configured")
-        from verda.agency.score import ranking
-        return ranking(agency_store, {"limit": limit}, mode="local")
+        # The same opportunity score the dashboard shows. The list and every listing page ask for it; one calculation serves them for a minute.
+        if fresh or ranking_cache["value"] is None or time.time() - ranking_cache["at"] > 60:
+            from verda.agency.opportunity import one_ranking
+            ranking_cache.update(value=one_ranking(agency_store, {"limit": 1000}, mode="local"), at=time.time())
+        value = ranking_cache["value"]
+        return {**value, "ranked": value["ranked"][:limit]}
 
     @app.post("/control/private/listing/{listing_id}/decide", dependencies=[Depends(editor)])
     def listing_decide(listing_id: str, command: ListingDecision):

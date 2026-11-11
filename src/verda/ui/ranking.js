@@ -10,7 +10,7 @@
     area: ['Alan · büyükten', (a, b) => (b.area_m2 ?? -Infinity) - (a.area_m2 ?? -Infinity)],
     unit: ['m² fiyatı · düşükten', (a, b) => (unit(a) ?? Infinity) - (unit(b) ?? Infinity)],
     route: ['Mertur · yakından', (a, b) => (a.route_minutes_max ?? Infinity) - (b.route_minutes_max ?? Infinity)],
-    discount: ['Emsale göre ucuz', (a, b) => (b.discount_pct ?? -Infinity) - (a.discount_pct ?? -Infinity)],
+    discount: ['Adil fiyata göre ucuz', (a, b) => (b.gap_pct ?? -Infinity) - (a.gap_pct ?? -Infinity)],
     published: ['Yayın · yeni önce', (a, b) => (b.published_at ?? -Infinity) - (a.published_at ?? -Infinity)],
     discovered: ['Keşif · yeni önce', (a, b) => (b.discovered_at ?? -Infinity) - (a.discovered_at ?? -Infinity)]};
   const FILTERS = [['all', 'Hepsi', () => true], ['settled', 'Ön eleme tamam', r => !r.provisional], ['research', 'Araştırılıyor', r => r.provisional], ['clarify', 'Netleştirme', r => r.needs_clarification]];
@@ -23,9 +23,12 @@
 
   const chips = r => {
     const out = [];
-    if (r.discount_pct != null) out.push([Math.abs(r.discount_pct) < 5 ? 'emsale yakın' : r.discount_pct > 0 ? '%' + num(r.discount_pct) + ' ucuz' : '%' + num(-r.discount_pct) + ' pahalı',
-      r.discount_pct >= 5 ? 'ok' : r.discount_pct <= -5 ? 'bad' : '', r.comparables + ' emsal']);
-    else out.push(['emsal yok', 'line', 'Yeterli emsal yok; puan en çok 49']);
+    // The same judgement the dashboard shows: the label says how the price stands against the fair price, the tooltip says what the fair price rests on.
+    if (r.gap_pct != null) out.push([(r.label || 'Adil fiyat') + ' ' + (r.gap_pct >= 0 ? '+' : '−') + '%' + num(Math.abs(r.gap_pct)),
+      ['Güçlü fırsat', 'Olası fırsat'].includes(r.label) ? 'ok' : ['Pahalı', 'Adilin üstünde'].includes(r.label) ? 'bad' : '',
+      'Adil ≈ ' + num(r.fair_unit_price) + ' ₺/m² · ' + (r.fair_tier === 'local' ? 'mahallede ' + r.fair_n + ' emsal' : 'bölgesel tahmin (mahallede yeterli emsal yok)')]);
+    else out.push(['adil fiyat yok', 'line', r.fair_note || 'Yeterli emsal yok; puan en çok 49']);
+    (r.caps || []).forEach(c => out.push([c, 'warn', 'Puanı sınırlayan neden']));
     out.push(r.provisional ? [(r.missing || []).length > 2 ? (r.missing.length + ' eksik') : (r.missing || []).length ? 'eksik: ' + r.missing.map(x => MISSING[x] || x).join(', ') : 'araştırılıyor', 'warn', (r.missing || []).map(x => MISSING[x] || x).join(', ')]
       : ['ön eleme tamam', 'ok', 'Resmî uygunluk değildir']);
     for (const [k, v] of Object.entries(r.penalties || {})) out.push(['−' + v + ' ' + (PENALTY[k] || k), 'bad', 'Puandan düşen ceza']);
@@ -36,9 +39,10 @@
   const row = r => {
     const a = el('a', null, 'lrow' + (r.needs_clarification ? ' clar' : ''));
     a.href = '/control/listing/' + r.listing_id;
-    const band = r.score >= 75 ? 'hi' : r.score >= 50 ? 'mid' : 'lo';
+    const band = r.score >= 65 ? 'hi' : r.score >= 50 ? 'mid' : 'lo';
     const s = el('span', String(r.score), 'score ' + band + (r.provisional ? ' prov' : ''), a);
-    s.title = r.provisional ? 'Geçici puan: doğrulama eksik' : 'Puan';
+    const p = r.parts || {};
+    s.title = (r.provisional ? 'Geçici fırsat puanı: doğrulama eksik' : 'Fırsat puanı') + (p.purpose == null ? '' : ' · fiyat ' + (p.opportunity ?? '—') + ' · amaç ' + p.purpose + ' · Mertur ' + p.proximity);
     const main = el('span', null, 'lmain', a);
     const title = readableTitle(r.title) || 'İlan ' + r.listing_id;
     el('span', title, 'ltitle', main).title = title;

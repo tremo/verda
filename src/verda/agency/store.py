@@ -19,6 +19,7 @@ from verda.facts.service import FactService, migrate_v8
 from verda.agency.assets import migrate_v9
 
 SCHEMA_VERSION = 9
+BEGIN_TRIES = 4             # each try waits the connection's own timeout (10 s)
 TERMINAL = {'complete', 'cancelled', 'failed'}
 
 
@@ -39,7 +40,15 @@ class AgencyStore:
         con.row_factory = sqlite3.Row
         try:
             con.execute('PRAGMA foreign_keys=ON')
-            con.execute('BEGIN IMMEDIATE')
+            for attempt in range(BEGIN_TRIES):
+                # Another service in a long run of short transactions can keep this one waiting past the timeout (the browser worker ended 297 times on
+                # "database is locked" by 9 Nov 2026, each time dropping the job it held). Nothing has been done yet, so asking again is safe.
+                try:
+                    con.execute('BEGIN IMMEDIATE')
+                    break
+                except sqlite3.OperationalError as error:
+                    if 'locked' not in str(error) or attempt == BEGIN_TRIES - 1:
+                        raise
             yield con
             con.commit()
         except BaseException:
@@ -90,6 +99,7 @@ class AgencyStore:
                     migrate_v8(con)
                 if con.execute('SELECT version FROM agency_meta').fetchone()[0] == 8:
                     migrate_v9(con)
+                self._ensure_indexes(con)
                 return
             for sql in [
                 'CREATE TABLE agency_meta(version INTEGER PRIMARY KEY)', 'INSERT INTO agency_meta VALUES(4)',
@@ -122,6 +132,14 @@ class AgencyStore:
             migrate_v7(con)
             migrate_v8(con)
             migrate_v9(con)
+            self._ensure_indexes(con)
+
+    @staticmethod
+    def _ensure_indexes(con):
+        """Indexes added after a table's own migration; asked for on every start, so no schema version is tied to them (an older process still opens the file).
+        claims.resolves: "has this claim been withdrawn" is asked once per claim on every fact read and scanned the whole table without it
+        (one ranking took 64 s on 9 Nov 2026, 8 s with the index; the panel's list, the publisher and every sweep pay that price)."""
+        con.execute('CREATE INDEX IF NOT EXISTS claims_resolves ON claims(resolves) WHERE resolves IS NOT NULL')
 
     def worker_status(self, worker_id, mode, state, *, now=None):
         if mode not in {'local', 'synthetic'} or state not in {'processing', 'idle', 'stopped'}:
@@ -501,10 +519,12 @@ class AgencyStore:
         now = time.time() if now is None else now
         with self.transaction() as con:
             owned=self._owned(con, task, now)
+            offline = False
             if tool.resource:
                 con.execute('INSERT OR IGNORE INTO resources(key) VALUES(?)', (tool.resource,))
                 resource = con.execute('SELECT * FROM resources WHERE key=?', (tool.resource,)).fetchone()
-                if resource['halted'] or resource['owner'] or resource['next_at'] > now:
+                offline = bool(resource['halted']) and tool.works_offline
+                if not offline and (resource['halted'] or resource['owner'] or resource['next_at'] > now):
                     state = 'blocked' if resource['halted'] else 'queued'
                     why = resource['halted'] or ('resource_busy' if resource['owner'] else 'rate_limit_wait')
                     con.execute('UPDATE inbox SET state=?,reason=?,available_at=?,token=NULL,lease_until=NULL WHERE id=?',
@@ -519,12 +539,13 @@ class AgencyStore:
             call_id = uuid4().hex
             con.execute('INSERT INTO tool_calls(id,task_id,tool,resource,effect,state,arguments,started_at,operation_key,attempt) VALUES(?,?,?,?,?,?,?,?,?,?)',
                         (call_id, task['id'], tool.key, tool.resource, tool.effect, 'started', canonical(arguments), now,operation_key,attempt))
-            if tool.resource:
+            if tool.resource and not offline:
+                # An offline call never owns the source: finishing it must not clear the stop (only a person resumes a stopped source).
                 con.execute('UPDATE resources SET owner=? WHERE key=?', (call_id, tool.resource))
             if hook:
                 hook(con, call_id)
             self._event(con, task, 'tool_started', {'call_id': call_id, 'operation_key':operation_key,'attempt':attempt,
-                'tool': tool.key, 'transport': tool.transport,'arguments': arguments, 'effect': tool.effect}, now)
+                'tool': tool.key, 'transport': tool.transport,'arguments': arguments, 'effect': tool.effect, **({'offline': True} if tool.resource and offline else {})}, now)
             return call_id
 
     def refuse_tool(self, task, tool, arguments, output, now=None):

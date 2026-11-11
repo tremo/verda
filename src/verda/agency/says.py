@@ -52,6 +52,39 @@ def layer(cache_path, now=None, fetch=_get):
     return data
 
 
+def layer_path(store):
+    return store.path.parent / (store.path.name + '.says-layer.json')
+
+
+def saved_layer(cache_path):
+    """The last layer this system downloaded, whatever its age, with the time it was saved: (data, saved_at), or None when there is none.
+    Sit areas change by ministry decision, rarely; a dated copy answers far better than no answer while the source is closed."""
+    cache = Path(cache_path)
+    try:
+        data = json.loads(cache.read_text())
+        if isinstance(data, dict) and isinstance(data.get('features'), list) and data['features']:
+            return data, cache.stat().st_mtime
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def copy_day(store):
+    """The day the saved copy of the layer was downloaded, as it is shown to the user ('23.10.2026'); None when there is no usable copy."""
+    saved = saved_layer(layer_path(store))
+    if saved is None:
+        return None
+    import datetime
+    return datetime.date.fromtimestamp(saved[1]).strftime('%d.%m.%Y')
+
+
+def stopped_reason(store):
+    """Why the live source is stopped (the open incident's reason), or None while it is open."""
+    with store.transaction() as con:
+        row = con.execute("SELECT halted FROM resources WHERE key='says'").fetchone()
+    return row['halted'] if row and row['halted'] else None
+
+
 def _inside(x, y, rings):
     """Even-odd test over a polygon's rings (outer ring and holes)."""
     hit = False
@@ -162,8 +195,19 @@ def check(store, args, mode='local', now=None, fetch=_get):
     rings = {p: parcel_ring(store, listing, mode, p) for p in parcels}
     if any(r is None for r in rings.values()):
         return {**base, 'classification': 'no_geometry', 'missing': [p for p, r in rings.items() if r is None and p]}
-    cache = store.path.parent / (store.path.name + '.says-layer.json')
-    data = layer(cache, now, fetch)
+    cache = layer_path(store)
+    stopped = stopped_reason(store)
+    if stopped:
+        # The ministry's server is closed to us (it asks for a login since about 23 Oct 2026). Nothing is tried around that: the answer comes from
+        # the copy saved on the last good day and says so, with the copy's date, wherever it is shown.
+        saved = saved_layer(cache)
+        if saved is None:
+            raise ResourceBlocked(stopped)
+        data, as_of, origin = saved[0], saved[1], 'saved_copy'
+    else:
+        data = layer(cache, now, fetch)
+        as_of, origin = cache.stat().st_mtime if cache.is_file() else now, 'live'
+    base.update(layer_as_of=as_of, layer_origin=origin)
     per = []
     for p, ring in rings.items():
         result = overlap(ring, data)

@@ -103,6 +103,12 @@ def build(store, *, mode='local', now=None, running=None, problems=()):
         # A service taken out of launchd is not listed at all: it must still show, or a stopped worker simply disappears from the page.
         health.append({'level': 'ok' if up else 'bad', 'text': f"{name}: {'çalışıyor' if up else 'KAPALI' if label in running else 'durduruldu (yüklü değil)'}"})
     for inc in incidents:
+        if inc['resource'] == 'says':
+            from verda.agency import says
+            day = says.copy_day(store)
+            if day:                      # the sit check goes on from the saved copy: worth knowing, not an alarm
+                health.append({'level': 'warn', 'text': f"Doğal sit haritası kapalı ({inc['reason']}, {age_text(now - inc['created_at'])}): {day} tarihli kopya kullanılıyor"})
+                continue
         health.append({'level': 'bad', 'text': f"Kaynak engelli: {inc['resource']} · {inc['reason']} (açılalı {age_text(now - inc['created_at'])})"})
     if not incidents:
         health.append({'level': 'ok', 'text': 'Açık kaynak engeli yok'})

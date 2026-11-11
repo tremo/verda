@@ -271,3 +271,22 @@ def rank_all(store, *, mode='local'):
         out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, effect)})
     out.sort(key=lambda r: -r['new']['score'])
     return {'ranked': out, 'scatter': scatter}
+
+
+NOTE = ('Fırsat puanı: adil fiyata göre fark (%45), amaca uygunluk (%40), Mertur yakınlığı (%15). Adil fiyat ilan fiyatlarından bir tahmindir; '
+        'resmî değerleme değildir. Geçici puanlar eksik doğrulama içerir.')
+
+
+def one_ranking(store, args=None, *, mode='local'):
+    """The one ranking every screen and agent reads: the listings by opportunity score, best first, each with what explains its score.
+    The panel and the agents used to read the older price-versus-peers score while the dashboard showed this one (the same listing was 97 there
+    and 66 here on 9 Nov 2026); that older number stays in the row as `purchase_score`, no longer as "the score"."""
+    limit = int((args or {}).get('limit', 50))
+    rows = []
+    for r in rank_all(store, mode=mode)['ranked']:
+        new, basis = r['new'], r['new'].get('basis') or {}
+        rows.append({**{k: v for k, v in r.items() if k != 'new'}, 'score': new['score'], 'purchase_score': r['score'], 'label': new['label'], 'gap_pct': new['gap_pct'],
+                     'fair_unit_price': new['fair_unit_price'], 'fair_tier': basis.get('tier'), 'fair_n': basis.get('n'), 'fair_note': basis.get('note'),
+                     'road': new['road'], 'caps': new['caps'],
+                     'parts': {'opportunity': new['opportunity'], 'purpose': new['purpose'], 'proximity': new['proximity'], **new['parts']}})
+    return {'ranked': rows[:limit], 'total': len(rows), 'settled': sum(not r['provisional'] for r in rows), 'note': NOTE}

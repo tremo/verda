@@ -191,17 +191,20 @@ def closed_documents(store, ranked_ids, now_iso, *, mode='local'):
 def build(store, *, mode='local', now=None, limit=1000):
     import time
     now_iso = iso(time.time() if now is None else now)
-    ranked = ranking(store, {'limit': limit}, mode=mode)
     from verda.agency import opportunity
     problems = []
     try:
-        newer = {r['listing_id']: r['new'] for r in opportunity.rank_all(store, mode=mode)['ranked']}
+        # One pass: the opportunity ranking is built on the older ranking's rows and hands them back, so the older one is not computed a second time.
+        both = opportunity.rank_all(store, mode=mode)['ranked'][:limit]
+        newer = {r['listing_id']: r['new'] for r in both}
+        rows = [{k: v for k, v in r.items() if k != 'new'} for r in both]
+        ranked = {'ranked': rows, 'total': len(rows), 'settled': sum(not r['provisional'] for r in rows)}
     except Exception as error:                # the older score keeps being published, but never silently: the status page and the log say so
         import sys, traceback
         where = traceback.extract_tb(error.__traceback__)[-1]
         problems.append(f"Fırsat puanı hesaplanamadı ({type(error).__name__} · {where.name}:{where.lineno}); pano eski puanı gösteriyor")
         print('opportunity.rank_all failed:', type(error).__name__, f'{where.filename}:{where.lineno}', file=sys.stderr, flush=True)
-        newer = {}
+        newer, ranked = {}, ranking(store, {'limit': limit}, mode=mode)
     docs = [(COLLECTION, row['listing_id'], listing_document(store, row, now_iso, mode=mode, new=newer.get(row['listing_id']))) for row in ranked['ranked']]
     docs += closed_documents(store, {d[1] for d in docs}, now_iso, mode=mode)
     by_state = {}

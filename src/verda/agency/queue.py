@@ -175,6 +175,8 @@ def work_queue(store, args, *, mode, status=None, now=None):
     photo_candidates = []
     from verda.agency.inbox import lost_conversations
     lost, queued_reads = lost_conversations(store, mode), set()
+    # The sit layer answers from its saved copy while the ministry's server is closed to us; without a copy the check waits for the source.
+    says_open = 'says' not in halted or says.saved_layer(says.layer_path(store)) is not None
     for listing in listings:
         current = status(listing)
         # A conversation an earlier read opened and the latest read did not find is read again once a day, whatever the messages' mode: this used to run
@@ -196,7 +198,7 @@ def work_queue(store, args, *, mode, status=None, now=None):
             if not stuck_here:
                 groups.setdefault('tkgm.neighbors', []).append({'listing_id': listing, 'why': 'neighbour_types_unchecked'})
         # The official sit layer is asked before any message: a parcel the map puts in a first-degree sit is eliminated, not written to.
-        says_due = seen_here.get('tkgm_looked_up') and 'says' not in halted \
+        says_due = seen_here.get('tkgm_looked_up') and says_open \
             and (current.get('decision') or {}).get('state') in ('research_required', 'conditional', 'eligible') \
             and says.stale(store, listing, mode, says_parcels(current))      # never checked, or the sale's parcels changed since
         says_stuck = False

@@ -75,7 +75,7 @@ def test_all_datca_remains_in_the_pool_when_a_fourth_local_peer_arrives():
 
 
 @pytest.mark.parametrize('field,value', [
-    ('access', 'corridor_conditional'), ('access', None), ('access', 'none'),
+    ('access', None), ('access', 'none'),
     ('shared_title', None), ('shared_title', True), ('sale_scope_resolved', None),
     ('natural_sit', None), ('natural_sit', 'first_degree'),
     ('archaeological_sit', None), ('archaeological_sit', True),
@@ -102,9 +102,47 @@ def test_direct_access_does_not_mix_with_easements_or_different_sit_states():
     assert estimate(data)['fair'] is None
 
 
-def test_unknown_or_conditional_subject_access_blocks_a_fair_price_instead_of_assuming_a_road():
+def test_conditional_subject_gets_a_reference_from_its_own_access_group_only():
     data = small()
     data[1]['999']['facts']['access']['value'] = 'corridor_conditional'
+    for i, rate in enumerate((1000, 2000, 3000, 4000), 10):
+        add(data, i, rate=rate, access='corridor_conditional')
+    v = estimate(data)
+    assert v['fair'] == 2500 and v['n'] == 4 and v['confidence'] == 'low'
+    assert v['conditions']['access'] == 'corridor_conditional'
+    assert all(p['access'] == 'corridor_conditional' for p in v['comps'])
+    assert {p['ids'][0] for p in v['comps']} == {'10', '11', '12', '13'}
+    assert any('Yol erişimi koşullu' in warning for warning in v['warnings'])
+    # A later negative finding removes that parcel, rather than preserving its tentative price.
+    data[1]['10']['facts']['access']['value'] = 'none'
+    assert estimate(data)['n'] == 3
+    data[1]['999']['facts']['access']['value'] = 'none'
+    assert estimate(data)['fair'] is None
+
+
+def test_conditional_peers_do_not_change_a_confirmed_road_reference():
+    data = small()
+    add(data, 10, rate=1000000, access='corridor_conditional')
+    v = estimate(data)
+    assert v['fair'] == 2500 and v['n'] == 4
+    assert all(p['access'] == 'direct' for p in v['comps'])
+
+
+def test_conditional_road_warning_survives_sparse_data_and_a_well_supported_fit():
+    data = market()
+    for status in data[1].values():
+        status['facts']['access']['value'] = 'corridor_conditional'
+    v = estimate(data)
+    assert v['fit_n'] == 108 and v['fair'] is not None and v['confidence'] == 'low'
+    row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
+    assert listing_view(row, v, 0.5, '', {'value': 'corridor_conditional'}, True)['label'] == 'Düşük güven'
+    sparse = estimate(data, area=50000)
+    assert sparse['fair'] is None and any('Yol erişimi koşullu' in w for w in sparse['warnings'])
+
+
+def test_unknown_subject_access_still_requires_a_known_access_state():
+    data = small()
+    data[1]['999']['facts'].pop('access')
     v = estimate(data)
     assert v['fair'] is None and v['subject_issues'] == ['access']
 

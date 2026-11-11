@@ -1,7 +1,9 @@
 """Datça asking-price comparables. Deterministic, explainable, no area price coefficient.
 
 Current accepted facts qualify parcels; unknown access/title/sit/sale scope is not a
-negative fact. Direct access and easements, and different sit states, never mix.
+negative fact. Direct access, easements and conditional access are separate groups,
+as are different sit states. Conditional access can yield a provisional reference;
+it is never promoted to confirmed road access and never exceeds low confidence.
 One parcel is one observation, even under several ads. The subject and overlapping
 sale packages are absent from BOTH comparables and coefficient learning.
 
@@ -24,13 +26,14 @@ MIN_FIT = 20
 MIN_HOOD_ROWS = 3
 HOOD_PENALTY, TYPE_PENALTY = 3.0, 6.0
 PROFILE_FIELDS = ('access', 'shared_title', 'natural_sit', 'archaeological_sit')
+COMPARABLE_ACCESS = ('direct', 'existing_easement', 'corridor_conditional')
 CRITICAL = (*PROFILE_FIELDS, 'price_tl', 'sale_area_m2', 'parcel_area_m2', 'sale_scope', 'sale_scope_resolved', 'sale_parcels', 'parcel_identity', 'property_type')
 GRADE_WEIGHT = {'kullanici': 1.0, 'resmi': 1.0, 'bagimsiz': 0.9, 'beyan': 0.7}
 UNMODELED = ['Su, elektrik, eğim, manzara ve yapılaşma koşulları bu hesapta eşitlenmedi.']
 REASONS = {
     'identity': 'Parsel kimliği bilinmiyor', 'conflict': 'Kayıtlarda çelişki var',
     'scope': 'Satılan alan ve satış kapsamı kesinleşmemiş', 'price': 'Güncel fiyat veya alan bilinmiyor', 'type': 'Nitelik bilinmiyor',
-    'access': 'Doğrudan yol erişimi veya mevcut geçiş hakkı kesinleşmemiş',
+    'access': 'Yol yok veya erişim durumu bilinmiyor',
     'title': 'Hisseli tapu veya tapu durumu bilinmiyor', 'sit': 'Sit durumu eksik veya karşılaştırmaya uygun değil',
     'removed': 'İlan kaldırılmış veya kullanıcı tarafından elenmiş', 'stale': 'Fiyat 180 günden eski',
     'duplicate_conflict': 'Aynı parselin ilanlarında kapsam veya özellik çelişkisi var',
@@ -80,7 +83,7 @@ def profile(row, current, dates, now):
         issues.append('scope')
     if not values.get('property_type'):
         issues.append('type')
-    if values.get('access') not in ('direct', 'existing_easement'):
+    if values.get('access') not in COMPARABLE_ACCESS:
         issues.append('access')
     if values.get('shared_title') is not False:
         issues.append('title')
@@ -225,6 +228,10 @@ class Estimator:
         if subject['issues']:
             return {**base, 'note': 'Bu ilan için hesap bekliyor: ' + '; '.join(REASONS[i] for i in subject['issues']) + '.',
                     'subject_issues': subject['issues']}
+        base['conditions'] = subject['conditions']
+        if subject['conditions']['access'] == 'corridor_conditional':
+            base['warnings'] = ['Yol erişimi koşullu: karşılaştırma aynı durumdaki parsellerle yapıldı. '
+                                'Yolun varlığı doğrulanmış sayılmaz; yol olmadığı kesinleşirse ilan ve emsal havuzundan elenir.']
         counts, pool = Counter(), []
         for p in self.rows:
             reason = ('subject' if p['parcels'] & subject['parcels'] or listing in p['ids'] else
@@ -244,6 +251,7 @@ class Estimator:
             tf = math.exp(fit['type'][kind] - fit['type'][p['type']]) if fit and kind in fit['type'] else 1.0
             weight = p['quality'] * p['freshness'] * (2.0 if same_hood else 1.0) * (1.25 if same_type else 1.0)
             comps.append({'ids': sorted(p['ids']), 'neighborhood': p['neighborhood'], 'type': p['type'],
+                          'access': p['conditions']['access'],
                           'area': round(p['area'], 2), 'rate': round(p['rate'], 2), 'adjusted': p['rate'] * hf * tf,
                           'region_factor': hf if fit or same_hood else None,
                           'type_factor': tf if (fit and kind in fit['type']) or same_type else None,
@@ -258,7 +266,7 @@ class Estimator:
                           'type_factor': round(c['type_factor'], 4) if c['type_factor'] is not None else None} for c in comps]
         if len(comps) < MIN_COMPS:
             return {**base, 'note': f'Datça genelinde aynı yol/sit/tapu koşullarında {len(comps)} bağımsız emsal var; en az {MIN_COMPS} gerekli.'}
-        warnings = []
+        warnings = list(base['warnings'])
         if any(c['region_factor'] is None for c in comps):
             warnings.append('Mahalle farkını öğrenmek için veri yetersiz; rakam Datça referansıdır, bu mahallenin değerlemesi değildir.')
         if any(c['type_factor'] is None for c in comps):

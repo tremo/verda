@@ -32,6 +32,9 @@ def add_commands(parser, commands):
     decide.add_argument('field')
     decide.add_argument('value', help='JSON value, e.g. true, 8000000, "none"')
     decide.add_argument('--note', required=True)
+    retract = commands.add_parser('agency-facts-retract', help='Take back one accepted claim that should not stand; it stays in the log with the reason')
+    retract.add_argument('claim_id')
+    retract.add_argument('--note', required=True)
     resolve_review = commands.add_parser('agency-facts-resolve')
     resolve_review.add_argument('claim_id')
     resolve_review.add_argument('--note', required=True)
@@ -210,6 +213,9 @@ def run(args):
     if command == 'agency-facts-decide':
         with store.transaction() as con:
             return store.facts.decide(con, args.listing_id, 'local', args.field, json.loads(args.value), args.note, time.time())
+    if command == 'agency-facts-retract':
+        with store.transaction() as con:
+            return store.facts.retract(con, args.claim_id, args.note, time.time())
     if command == 'agency-facts-resolve':
         with store.transaction() as con:
             return store.facts.resolve_review(con, args.claim_id, accepted=args.accept, note=args.note, now=time.time())

@@ -148,3 +148,28 @@ def test_no_road_and_no_right_of_way_is_not_concluded_where_nobody_spoke_of_a_ri
     assert road.get('reason') != 'easement_not_addressed'
     with store.transaction() as con:
         assert store.facts.decide(con, '1', 'local', 'access', 'none', 'yerinde gördüm', 10.0)['status'] == 'accepted'
+
+
+def test_a_claim_that_should_not_stand_is_taken_back_with_its_reason_and_what_was_known_before_decides_again(tmp_path):
+    from verda.agency.research import fact_propose, fact_status
+    store = _store(tmp_path)
+    said = _thread(store, '1', [{'id': 'b', 'role': 'seller', 'text': 'Yolu yok, geçiş hakkı da yok. Sit de yok.'}])
+    args = dict(listing_id='1', observation_id=said, source_ref='message:b')
+    road = fact_propose(store, {**args, 'field': 'access', 'value': 'none', 'quote': 'Yolu yok, geçiş hakkı da yok'}, mode='local', task_id='', proposer='llm:manager')
+    sit = fact_propose(store, {**args, 'field': 'archaeological_sit', 'value': False, 'quote': 'Sit de yok'}, mode='local', task_id='', proposer='llm:manager')
+    assert road['status'] == sit['status'] == 'accepted' and fact_status(store, '1')['decision']['state'] == 'excluded'
+    with store.transaction() as con:
+        import pytest
+        with pytest.raises(ValueError):
+            store.facts.retract(con, road['claim_id'], ' ', 20.0)                                     # never without a reason
+        with pytest.raises(ValueError):
+            store.facts.retract(con, 'no-such-claim', 'yanlış', 20.0)
+        out = store.facts.retract(con, road['claim_id'], 'Geçiş hakkı sorulmadı; okuyucunun çıkarımı.', 20.0)
+        assert out['listing_id'] == '1' and out['field'] == 'access' and out['assessment']['state'] != 'excluded'
+        with pytest.raises(ValueError):
+            store.facts.retract(con, road['claim_id'], 'ikinci kez', 21.0)                            # already taken back
+        rows = con.execute("SELECT status, proposer, reason, quote, resolves FROM claims WHERE listing_ref='1' AND field='access' ORDER BY seq").fetchall()
+    assert [tuple(r) for r in rows] == [('accepted', 'llm:manager', 'verified', 'Yolu yok, geçiş hakkı da yok', None),
+                                        ('withdrawn', 'correction', 'retracted', 'Geçiş hakkı sorulmadı; okuyucunun çıkarımı.', road['claim_id'])]      # nothing deleted
+    facts = fact_status(store, '1')['facts']
+    assert 'access' not in facts and facts['archaeological_sit']['value'] is False                    # the other fact from the same message stands

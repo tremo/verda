@@ -74,3 +74,12 @@ def test_the_panels_ranking_is_computed_once_a_minute_and_the_publisher_ranks_on
     assert calls['n'] == before + 1 and listing == {'state': 'eligible', 'score': 97, 'opp': 72}
     meta = next(d for c, key, d in docs if (c, key) == ('meta', 'v2'))
     assert meta['total'] == 1 and meta['settled'] == 1
+
+
+def test_a_peers_age_is_shown_in_whole_days_so_a_listing_document_does_not_change_every_few_minutes():
+    from verda.agency.opportunity import shown_comps
+    comps = [{'neighborhood': 'Yaka Mh.', 'rate': 900, 'age_days': 3.4}, {'neighborhood': 'Yaka Mh.', 'rate': 950, 'age_days': None}] + [{'rate': n, 'age_days': 0.9} for n in range(20)]
+    out = shown_comps(comps)
+    assert len(out) == 12 and out[0] == {'neighborhood': 'Yaka Mh.', 'rate': 900, 'age_days': 3} and out[1]['age_days'] is None and out[2]['age_days'] == 0
+    later = shown_comps([{**c, 'age_days': None if c['age_days'] is None else c['age_days'] + 300 / 86400} for c in comps])      # the next publishing round
+    assert later == out and comps[0]['age_days'] == 3.4 and shown_comps(None) == []

@@ -106,5 +106,9 @@ def test_the_days_decisions_are_few_ordered_and_each_names_its_listing_with_both
     text = decisions.as_text(out)
     line = next(l for l in text.splitlines() if '#1000000001' in l)
     assert '153/57' in line and 'TKGM: ' + links(1)['tkgm'] in line and 'Sahibinden: ' + links(1)['sahibinden'] in line       # number, parcel and both links on one line
+    unlooked = decisions.as_text({'items': [{**first, 'links': {'tkgm': None, 'listing': links(1)['sahibinden']}}]})
+    assert 'TKGM: resmî sorgu henüz yapılmadı · Sahibinden: ' in unlooked                              # no official record yet: said, never left out or made up
+    cheap = next(i for i in out['items'] if i['kind'] == 'verify_cheap')
+    assert cheap['why'].startswith('1.000 ₺/m², beklenen ≈ 1.000 ₺/m²')
     assert decisions.as_text({'items': []}) == 'Bugün senden bekleyen bir karar yok.'
     assert decisions.money(6_500_000) == '6,5 M ₺' and decisions.money(950_000) == '950.000 ₺' and decisions.money(None) == '—'

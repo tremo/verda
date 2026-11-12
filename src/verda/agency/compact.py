@@ -13,7 +13,8 @@ def _size(value):
 
 SMALL_OUTPUT = 1500
 # Tools whose output IS what the agent decides from (queues, plans, statuses): never summarized, only capped when huge.
-DECISION_TOOLS = frozenset({'facts.queue', 'scan.delta', 'inbox.plan', 'facts.status', 'listings.rank', 'records.audit', 'records.listing', 'policy.screen', 'facts.propose', 'listing.flag', 'replies.pending'})
+DECISION_TOOLS = frozenset({'facts.queue', 'scan.delta', 'inbox.plan', 'facts.status', 'listings.rank', 'records.audit', 'records.listing', 'policy.screen', 'facts.propose', 'listing.flag', 'replies.pending',
+                            'chat.listings', 'chat.today', 'chat.system'})
 DECISION_CAP = 24_000
 
 

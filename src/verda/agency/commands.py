@@ -79,6 +79,12 @@ def add_commands(parser, commands):
     scan.add_argument('--no-details', action='store_true', help='Walk the result pages only; read no listing detail')
     sync = commands.add_parser('agency-inbox-sync')
     sync.add_argument('--env-file', type=Path)
+    telegram = commands.add_parser('agency-telegram', help='Verda over Telegram: answers the one paired chat (outbound connection only)')
+    telegram.add_argument('--env-file', type=Path, help='File with the VERDA_TELEGRAM_TOKEN line; the owner fills it in')
+    telegram.add_argument('--continuous', action='store_true')
+    telegram_pair = commands.add_parser('agency-telegram-pair', help='Confirm the code the bot showed, so that chat becomes the one Verda answers')
+    telegram_pair.add_argument('code', nargs='?')
+    telegram_pair.add_argument('--forget', action='store_true', help='End the pairing: the bot answers nobody until a new code is confirmed')
     trigger = commands.add_parser('agency-trigger')
     trigger.add_argument('file', type=Path)
     event = commands.add_parser('agency-event')
@@ -172,6 +178,17 @@ def run(args):
                 record_status(store, result, wait=backoff or args.every)
             print(json.dumps({**result, **({'backoff_seconds': backoff} if backoff else {})}, ensure_ascii=False), flush=True)
             _time.sleep(backoff or args.every)
+    if command == 'agency-telegram':
+        from verda.agency import telegram
+        return telegram.run(store, env_file=args.env_file or telegram.DEFAULT_ENV, continuous=args.continuous)
+    if command == 'agency-telegram-pair':
+        from verda.agency import telegram
+        if args.forget:
+            return {'forgotten': telegram.forget(store)}
+        if not args.code:
+            raise ValueError('Code required (the bot shows it when you send /start)')
+        name = telegram.pair(store, args.code)
+        return {'paired': name is not None, **({'chat': name} if name else {'reason': 'wrong_or_expired_code'})}
     if command == 'agency-source-resume':
         store.resolve_source(args.incident_id,args.note)
         return {'resolved':args.incident_id}

@@ -88,7 +88,8 @@ def attention(store, *, mode='local', now=None, queue=None):
         # The same job stopping for the same reason is one topic, however often it happened (on 9 Nov 2026 one inbox task filled 19 of the rows and the
         # header counted 488 topics). A task already marked as seen stays out; a new stop of the same kind brings the topic back.
         stopped = {}
-        for t in con.execute("SELECT id,agent,objective,state,reason,listing_ref,created_at FROM inbox WHERE mode=? AND state IN ('blocked','uncertain','waiting_user') ORDER BY created_at", (mode,)):
+        # A chat question that could not be answered is told to the owner in the chat itself; it is not an open topic here.
+        for t in con.execute("SELECT id,agent,objective,state,reason,listing_ref,created_at FROM inbox WHERE mode=? AND state IN ('blocked','uncertain','waiting_user') AND source!='chat' ORDER BY created_at", (mode,)):
             if 'task:' + t['id'] not in acked:
                 stopped.setdefault((t['agent'], t['state'], t['objective'][:140], t['reason'] or ''), []).append(t)
         for (agent, state, objective, reason), group in stopped.items():

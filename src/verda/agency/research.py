@@ -223,6 +223,20 @@ def vocabulary_hint(field):
     return list(spec.values) if spec and spec.kind == 'enum' else None
 
 
+EASEMENT_WORDS = ('geçiş', 'gecis', 'geçit', 'gecit', 'irtifak', 'mahkeme yol', 'yol hakk')
+
+
+def easement_addressed(con, observation_id):
+    """Whether anyone in the record the proposal quotes (the seller, or our own question) spoke of a right of way at all."""
+    from verda.facts.text import fold
+    from verda.facts.verify import source_texts
+    row = con.execute('SELECT tool, payload FROM observations WHERE id=?', (observation_id,)).fetchone()
+    if row is None:
+        return False
+    said = fold(' '.join(t['text'] for t in source_texts(row['tool'], json.loads(row['payload']))))
+    return any(fold(word) in said for word in EASEMENT_WORDS)
+
+
 def fact_propose(store, args, *, mode, task_id, proposer=None):
     """The reading agent's proposal. It is verified like any other: the model never writes facts."""
     import time
@@ -230,6 +244,14 @@ def fact_propose(store, args, *, mode, task_id, proposer=None):
     with store.transaction() as con:
         agent = con.execute('SELECT agent FROM inbox WHERE id=?', (task_id,)).fetchone()
         who = proposer or 'llm:' + (agent['agent'] if agent else 'unknown')
+        # "No road and no right of way" eliminates the listing. Our standard question asks only about cadastral frontage, so an answer of
+        # "no cadastral road, there is a stream track" leaves the right of way unasked and unanswered. On 13 Nov 2026 a reader concluded
+        # "none" from exactly that and a 68-point candidate was eliminated. An elimination is not inferred: where nobody in the conversation
+        # spoke of a right of way, the conclusion is refused and the reader marks the answer for the owner instead.
+        if args['field'] == 'access' and args['value'] == 'none' and who.startswith('llm:') and not easement_addressed(con, args['observation_id']):
+            return {'status': 'rejected', 'reason': 'easement_not_addressed',
+                    'hint': "Konuşmada geçiş hakkından hiç söz edilmemiş: access=none (yol da geçiş hakkı da yok) çıkarılamaz. Öneri verme; "
+                            "listing.flag ile işaretle (not: kadastral yol yok, geçiş hakkı sorulmadı)."}
         result = store.facts.submit(con, Proposal(
             listing_ref=args['listing_id'], field=args['field'], value=normalise_value(args['field'], args['value']), proposer=who, mode=mode,
             observation_id=args['observation_id'], source_ref=args.get('source_ref') or None,

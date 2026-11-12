@@ -145,6 +145,22 @@ class FactService:
             result['assessment'] = self.assess(con, listing_ref, mode, now)
         return result
 
+    def retract(self, con, claim_id, note, now, *, by='correction', assess=True) -> dict:
+        """Takes back one accepted claim that should not stand: a reader's over-reading found afterwards. Like `withdraw`, nothing is deleted:
+        the claim stays in the log, a `withdrawn` row with the reason points at it and the loader skips it, so what was known without it decides again."""
+        old = con.execute("SELECT * FROM claims c WHERE id=? AND status='accepted' AND NOT EXISTS (SELECT 1 FROM claims w WHERE w.resolves=c.id AND w.status=?)",
+                          (claim_id, WITHDRAWN)).fetchone()
+        if old is None or not (note or '').strip():
+            raise ValueError('Only a standing accepted claim can be retracted, and it needs a reason')
+        con.execute('''INSERT INTO claims(id,listing_ref,mode,field,value,scope,source_kind,key,observation_id,source_ref,quote,subject,
+            proposer,status,grade,reason,resolves,verifier,created_at,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (uuid4().hex, old['listing_ref'], old['mode'], old['field'], old['value'], old['scope'], old['source_kind'], old['key'], None, None, note.strip()[:500], old['subject'],
+             by, WITHDRAWN, None, 'retracted', old['id'], VERIFIER, now, digest({'withdraw': old['id']})))
+        result = {'retracted': claim_id, 'listing_id': old['listing_ref'], 'field': old['field']}
+        if assess:
+            result['assessment'] = self.assess(con, old['listing_ref'], old['mode'], now)
+        return result
+
     def resolve_review(self, con, claim_id, *, accepted: bool, note: str, now: float) -> dict:
         """Answer a needs_review item. Accepting keeps the source's own grade: the user
         confirmed what was said, which does not turn a statement into an official record."""

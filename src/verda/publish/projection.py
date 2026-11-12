@@ -92,6 +92,14 @@ def opp_view(new):
             'signals': new.get('signals') or []}
 
 
+def land_view(land):
+    """The parcel's terrain measurement for the dashboard (None when it was not measured)."""
+    if not land or land.get('slope_pct') is None:
+        return None
+    return {'slopePct': land['slope_pct'], 'slopeClass': land.get('slope_class'), 'faces': land.get('faces'), 'elevationM': land.get('elevation_m'),
+            'minM': land.get('min_m'), 'maxM': land.get('max_m'), 'coastM': land.get('coast_m'), 'dataset': land.get('dataset'), 'at': iso(land.get('observed_at'))}
+
+
 def trend_view(moved):
     """How the asking price moved lately, for the dashboard (None when it did not)."""
     from verda.agency import signals
@@ -150,7 +158,7 @@ def listing_document(store, row, now_iso, *, mode='local', new=None):
         'thread': thread_of(store, row['listing_id'], mode),
         'proposals': proposals_of(store, row['listing_id'], mode),
         'opp': opp_view(new) if new else None,
-        'priceTrend': trend_view(row.get('price_trend')), 'seller': row.get('seller'),
+        'priceTrend': trend_view(row.get('price_trend')), 'seller': row.get('seller'), 'land': land_view(row.get('land')),
         'areaConflict': area_conflict(current),
         'parcels': sale_parcels_view(store, row['listing_id'], current, mode),
         'photos': photo_ids(store, row['listing_id'], mode),

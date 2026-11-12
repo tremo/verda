@@ -26,7 +26,9 @@
     // The same judgement the dashboard shows: the label says how the price stands against the fair price, the tooltip says what the fair price rests on.
     if (r.gap_pct != null) out.push([(r.label || 'Adil fiyat') + ' ' + (r.gap_pct >= 0 ? '+' : '−') + '%' + num(Math.abs(r.gap_pct)),
       ['Güçlü fırsat', 'Olası fırsat'].includes(r.label) ? 'ok' : ['Pahalı', 'Adilin üstünde'].includes(r.label) ? 'bad' : '',
-      'Emsal ≈ ' + num(r.fair_unit_price) + ' ₺/m² · ' + (r.fair_tier === 'datca' ? 'Datça genelinde ' + r.fair_n + ' emsal · ' + (r.fair_confidence === 'low' ? 'düşük güven' : 'orta güven') : r.fair_tier === 'local' ? 'mahallede ' + r.fair_n + ' emsal' : 'bölgesel tahmin (mahallede yeterli emsal yok)')]);
+      'Beklenen ≈ ' + num(r.fair_unit_price) + ' ₺/m² · büyüklük, mahalle, denize uzaklık ve rakıma göre, ' + r.fair_n + ' ilandan' + (r.fair_confidence === 'low' ? ' · az veri' : '')]);
+    if (r.land && r.land.slope_pct != null) out.push(['%' + num(r.land.slope_pct) + ' eğim' + (r.land.faces ? ' · ' + r.land.faces : ''), r.land.slope_pct < 12 ? 'ok' : r.land.slope_pct >= 30 ? 'bad' : '',
+      'Arazi: ' + (r.land.slope_class || '') + (r.land.elevation_m != null ? ' · rakım ' + num(r.land.elevation_m) + ' m' : '') + (r.land.coast_m != null ? ' · denize ' + num(r.land.coast_m / 1000) + ' km' : '') + ' · kalite ' + (r.parts?.quality ?? '—')]);
     else out.push(['adil fiyat yok', 'line', r.fair_note || 'Yeterli emsal yok; puan en çok 49']);
     (r.caps || []).forEach(c => out.push([c, 'warn', 'Puanı sınırlayan neden']));
     out.push(r.provisional ? [(r.missing || []).length > 2 ? (r.missing.length + ' eksik') : (r.missing || []).length ? 'eksik: ' + r.missing.map(x => MISSING[x] || x).join(', ') : 'araştırılıyor', 'warn', (r.missing || []).map(x => MISSING[x] || x).join(', ')]

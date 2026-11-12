@@ -58,9 +58,9 @@ def area_matches(official, advertised) -> bool:
 
 # Grade follows the source of the observation, never the proposer.
 TOOL_GRADE = {SEARCH: 'rapor', LISTING: 'beyan', THREAD: 'beyan',
-              'tkgm.lookup': 'resmi', SAYS: 'resmi', 'tkgm.corridor': 'bagimsiz', 'tkgm.neighbors': 'bagimsiz', 'geo.route': 'bagimsiz', 'geo.elevation': 'bagimsiz'}
+              'tkgm.lookup': 'resmi', SAYS: 'resmi', 'tkgm.corridor': 'bagimsiz', 'tkgm.neighbors': 'bagimsiz', 'geo.route': 'bagimsiz', 'geo.terrain': 'bagimsiz'}
 SOURCE_KIND = {SEARCH: 'listing', LISTING: 'listing', THREAD: 'thread',
-               'tkgm.lookup': 'official', SAYS: 'official', 'tkgm.corridor': 'calc', 'tkgm.neighbors': 'calc', 'geo.route': 'calc', 'geo.elevation': 'calc'}
+               'tkgm.lookup': 'official', SAYS: 'official', 'tkgm.corridor': 'calc', 'tkgm.neighbors': 'calc', 'geo.route': 'calc', 'geo.terrain': 'calc'}
 
 # A wrong value here removes a listing from the funnel unseen, so the bar is higher.
 EXCLUDING = frozenset({('shared_title', True), ('archaeological_sit', True),

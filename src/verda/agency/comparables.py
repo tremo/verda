@@ -44,7 +44,7 @@ REASONS = {
 
 def neighborhood(name):
     name = fold(str(name or '')).strip()
-    name = re.sub(r'^(koyler)[ /:>-]*', '', name)
+    name = re.sub(r'^k[oö]yler[\s/:>-]*', '', name)          # "Köyler / Mesudiye Mh." and "KöylerMesudiye Mh." are Mesudiye
     return re.sub(r'\s+(mh\.?|mah\.?|mahallesi)$', '', name).strip()
 
 

@@ -47,6 +47,11 @@ def _facts_line(row):
     if new.get('gap_pct') is not None:
         parts.append(f"{new.get('label')} {'+' if new['gap_pct'] >= 0 else '−'}%{abs(new['gap_pct']):g}".replace('.', ','))
     parts.append('yol: ' + str(new.get('road')))
+    land = row.get('land') or {}
+    if land.get('slope_pct') is not None:
+        parts.append(f"eğim %{land['slope_pct']:g}".replace('.', ',') + (f" {land['faces']}" if land.get('faces') else ''))
+    if land.get('coast_m') is not None:
+        parts.append(f"denize {land['coast_m'] / 1000:.1f} km".replace('.', ','))
     for signal in new.get('signals') or []:
         parts.append(signal['text'])
     return ' · '.join(parts)
@@ -87,7 +92,7 @@ def today(store, *, mode='local', now=None, ranked=None, queue=None, limit=LIMIT
             fair = new.get('fair_unit_price')
             rate = round(row['price_tl'] / row['area_m2']) if row.get('price_tl') and row.get('area_m2') else None
             candidates['verify_cheap'].append(_item('verify_cheap', row, 'Çok ucuz görünüyor: fiyatı ve alanı doğrula',
-                                                    f"{rate} ₺/m², adil fiyat ≈ {fair} ₺/m²" + (f' · {path}' if path else ''),
+                                                    f"{rate} ₺/m², beklenen ≈ {fair} ₺/m²" + (f' · {path}' if path else ''),
                                                     'İlandaki alanı tapu kaydıyla karşılaştır; tapuyu görmeden kapora verme.'))
         elif not mark and not row.get('provisional') and (new.get('score') or 0) >= READY_FROM:
             candidates['ready'].append(_item('ready', row, 'Taraması bitti, puanı yüksek', _facts_line(row), 'Kısa listeye al, "belki" de ya da ele.'))

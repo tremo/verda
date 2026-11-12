@@ -19,7 +19,7 @@ def _thread(store, listing, messages, at=1.0, found=True):
     with con:
         con.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (oid, uuid.uuid4().hex, 'T', 'sahibinden', 't', listing, 'local', 'sahibinden.read_thread', 'sahibinden', 'tool_observation', at, '{}',
-                     json.dumps({'found': found, 'messages': messages}), uuid.uuid4().hex, '{}'))
+                     json.dumps({'listing_id': listing, 'found': found, 'messages': messages}), uuid.uuid4().hex, '{}'))
     con.close()
     return oid
 
@@ -121,3 +121,30 @@ def test_a_field_a_reader_marked_unclear_is_read_once_more_with_the_note_and_the
     monkeypatch.setattr('verda.agency.research.fact_status', lambda s, listing, mode: {'facts': {}, 'decision': {'state': 'research_required'}})
     later = replies.pending(store, {}, mode='local', now=100000.0 + 6 * 86400)['items']
     assert [(i['listing_id'], i['missing_fields']) for i in later] == [('1', ['natural_sit', 'archaeological_sit'])] and 'flagged' not in later[0]
+
+
+def test_no_road_and_no_right_of_way_is_not_concluded_where_nobody_spoke_of_a_right_of_way(tmp_path):
+    # 13 Nov 2026: asked only about cadastral frontage, a seller answered that there is none but a stream track; a reader made it "none" and a good candidate was eliminated
+    from verda.agency.research import fact_propose
+    store = _store(tmp_path)
+    asked = {'id': 'a', 'role': 'user', 'text': 'Merhaba, taşınmazın doğrudan kadastral yol cephesi var mı?'}
+    stream = _thread(store, '1', [asked, {'id': 'b', 'role': 'seller', 'text': 'Kadastral yola cephe yok, dere yatağından girilir.'}])
+    args = dict(listing_id='1', observation_id=stream, field='access', value='none', source_ref='message:b', quote='Kadastral yola cephe yok')
+    refused = fact_propose(store, args, mode='local', task_id='', proposer='llm:manager')
+    assert (refused['status'], refused['reason']) == ('rejected', 'easement_not_addressed') and 'listing.flag' in refused['hint']
+    with store.transaction() as con:
+        assert con.execute("SELECT count(*) FROM claims WHERE field='access'").fetchone()[0] == 0
+    # the seller denies both: the conclusion is his own words
+    both = _thread(store, '2', [asked, {'id': 'c', 'role': 'seller', 'text': 'Yolu yok, geçiş hakkı da yok.'}])
+    said = fact_propose(store, {**args, 'listing_id': '2', 'observation_id': both, 'source_ref': 'message:c', 'quote': 'Yolu yok, geçiş hakkı da yok'}, mode='local', task_id='', proposer='llm:manager')
+    assert said['status'] == 'accepted'
+    # we asked about the right of way ourselves: his "no" answers it
+    ours = {'id': 'd', 'role': 'user', 'text': 'Parselin kadastral yol cephesi görünmüyor; yola geçiş hakkınız (irtifak, mahkeme yolu vb.) var mı?'}
+    denied = _thread(store, '3', [ours, {'id': 'e', 'role': 'seller', 'text': 'Maalesef yoktur.'}])
+    answer = fact_propose(store, {**args, 'listing_id': '3', 'observation_id': denied, 'source_ref': 'message:e', 'quote': 'Maalesef yoktur'}, mode='local', task_id='', proposer='llm:manager')
+    assert answer.get('reason') != 'easement_not_addressed'
+    # nothing else is held back: a road he names, and the owner's own decision
+    road = fact_propose(store, {**args, 'value': 'direct', 'quote': 'dere yatağından girilir'}, mode='local', task_id='', proposer='llm:manager')
+    assert road.get('reason') != 'easement_not_addressed'
+    with store.transaction() as con:
+        assert store.facts.decide(con, '1', 'local', 'access', 'none', 'yerinde gördüm', 10.0)['status'] == 'accepted'

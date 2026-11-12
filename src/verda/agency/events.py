@@ -92,7 +92,8 @@ class EventBus:
                      task['agent'],record_kind,record_id,canonical(payload),now))
         recipients={}
         is_outcome=record_kind=='outcome'
-        if supervisor and task['agent']!=supervisor:
+        # A conversation with the owner is not work for the supervisor to judge: its answer goes to the owner, nobody is woken.
+        if supervisor and task['agent']!=supervisor and task['source']!='chat':
             wake=(is_outcome and not payload.get('incident_id')) or event_type=='source.blocked'
             recipients[supervisor]=('supervisor',None,wake)
         for row in con.execute('SELECT * FROM record_subscriptions WHERE enabled=1'):

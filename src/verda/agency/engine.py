@@ -255,6 +255,9 @@ def default_registry(config, store=None):
             'scan.delta': lambda args, context: __import__('verda.agency.discovery', fromlist=['x']).scan_delta(store, args, mode=context['mode'], task_id=context['task_id']),
             'inbox.plan': lambda args, context: __import__('verda.agency.inbox', fromlist=['x']).inbox_plan(store, args, mode=context['mode'], task_id=context['task_id']),
             'facts.status': lambda args, context: fact_status(store, args['listing_id'], mode=context['mode']),
+            'chat.listings': lambda args, context: __import__('verda.agency.chat', fromlist=['x']).listings(store, args, mode=context['mode']),
+            'chat.today': lambda args, context: __import__('verda.agency.chat', fromlist=['x']).today(store, args, mode=context['mode']),
+            'chat.system': lambda args, context: __import__('verda.agency.chat', fromlist=['x']).system(store, args, mode=context['mode']),
             'facts.propose': lambda args, context: fact_propose(store, args, mode=context['mode'], task_id=context['task_id']),
         }
     allowed = {t.key for t in config.tools}

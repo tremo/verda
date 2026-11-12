@@ -64,7 +64,7 @@ def build(store, *, mode='local', now=None, running=None, problems=()):
         resets = con.execute("SELECT count(*) FROM tool_calls WHERE tool='network.reset_modem' AND started_at>=?", (since,)).fetchone()[0]
         facts_today = con.execute("SELECT count(*) FROM claims WHERE status='accepted' AND source_kind='thread' AND created_at>=?", (since,)).fetchone()[0]
         photos_today = con.execute("SELECT count(*) FROM evidence_assets WHERE created_at>=?", (since,)).fetchone()[0] if con.execute("SELECT 1 FROM sqlite_master WHERE name='evidence_assets'").fetchone() else 0
-        stuck = [dict(r) for r in con.execute("SELECT agent, reason, count(*) n FROM inbox WHERE state IN ('blocked','waiting_user') AND created_at>? GROUP BY 1,2 ORDER BY n DESC LIMIT 6", (now - 6 * 3600,))]
+        stuck = [dict(r) for r in con.execute("SELECT agent, reason, count(*) n FROM inbox WHERE state IN ('blocked','waiting_user') AND source!='chat' AND created_at>? GROUP BY 1,2 ORDER BY n DESC LIMIT 6", (now - 6 * 3600,))]
         recent = []
         for r in con.execute("SELECT listing_ref, sent_at FROM outbox WHERE mode!='dry_run' AND state='confirmed' ORDER BY sent_at DESC LIMIT 6"):
             recent.append({'at': r['sent_at'], 'kind': 'message', 'text': f"Mesaj gönderildi ve doğrulandı · #{r['listing_ref']}"})
@@ -128,6 +128,10 @@ def build(store, *, mode='local', now=None, running=None, problems=()):
         health.append({'level': 'warn', 'text': f'Mesaj gönderimi: {sender}'})
     if resets:
         health.append({'level': 'warn' if resets > 3 else 'ok', 'text': f'Modem bugün {resets} kez yeniden başlatıldı (TKGM günlük sınırı)'})
+    from verda.agency import telegram
+    bridge = telegram.health(store, now)              # nothing is said on a machine where the bridge was never started
+    if bridge:
+        health.append(bridge)
     return {
         'generatedAt': iso(now), 'health': health,
         'listings': [{'state': k, 'label': STATE_LABEL.get(k, k), 'count': states.get(k, 0)} for k in STATE_LABEL],

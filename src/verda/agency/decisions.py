@@ -28,6 +28,10 @@ def money(value):
     return f'{value:,.0f}'.replace(',', '.') + ' ₺'
 
 
+def _thousands(value):
+    return '?' if value is None else f'{round(value):,}'.replace(',', '.')
+
+
 def _ago(seconds):
     days = int(seconds // 86400)
     return 'bugün' if days <= 0 else 'dün' if days == 1 else f'{days} gün önce'
@@ -92,7 +96,7 @@ def today(store, *, mode='local', now=None, ranked=None, queue=None, limit=LIMIT
             fair = new.get('fair_unit_price')
             rate = round(row['price_tl'] / row['area_m2']) if row.get('price_tl') and row.get('area_m2') else None
             candidates['verify_cheap'].append(_item('verify_cheap', row, 'Çok ucuz görünüyor: fiyatı ve alanı doğrula',
-                                                    f"{rate} ₺/m², beklenen ≈ {fair} ₺/m²" + (f' · {path}' if path else ''),
+                                                    f"{_thousands(rate)} ₺/m², beklenen ≈ {_thousands(fair)} ₺/m²" + (f' · {path}' if path else ''),
                                                     'İlandaki alanı tapu kaydıyla karşılaştır; tapuyu görmeden kapora verme.'))
         elif not mark and not row.get('provisional') and (new.get('score') or 0) >= READY_FROM:
             candidates['ready'].append(_item('ready', row, 'Taraması bitti, puanı yüksek', _facts_line(row), 'Kısa listeye al, "belki" de ya da ele.'))
@@ -138,7 +142,7 @@ def as_text(result, limit=LIMIT + 1):
         if entry.get('listingId'):
             where = ' · '.join(str(x) for x in (entry.get('neighborhood'), entry.get('parcel'), money(entry.get('priceTl')) if entry.get('priceTl') else None,
                                                  f"{entry['areaM2']:,.0f} m²".replace(',', '.') if entry.get('areaM2') else None) if x)
-            links = ' · '.join(f'{label}: {url}' for label, url in (('TKGM', entry['links'].get('tkgm')), ('Sahibinden', entry['links'].get('listing'))) if url)
+            links = ' · '.join(f'{label}: {url}' for label, url in (('TKGM', entry['links'].get('tkgm') or 'resmî sorgu henüz yapılmadı'), ('Sahibinden', entry['links'].get('listing'))) if url)
             lines.append(f"   #{entry['listingId']}" + (f' · {where}' if where else '') + (f' · {links}' if links else ''))
         lines.append(f"   {entry['why']}")
         lines.append(f"   → {entry['ask']}")

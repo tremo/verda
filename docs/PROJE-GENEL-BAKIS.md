@@ -47,7 +47,7 @@ Tek kullanıcı, tek konu: **Datça'da tarım amaçlı arazi** (zeytinlik, badem
 | Eski paket | `/Users/m/Dev/Verda/datca-agentic-app-2026-10-04` ve `review/` | Eski sistemin devir paketi (belgeler, şema, iş kuralları). Tarihsel; v2 bunların yerine geçti |
 | Eski tasarım | `/Users/m/Dev/Verda/docs/VERDA-MIMARI.md` | 5 Ekim tasarım önerisi. Hedefi anlatır, bugünkü hâli değil |
 
-### 2.2 Yerelde sürekli çalışan 4 servis (launchd, `deploy/launchd/`)
+### 2.2 Yerelde sürekli çalışan servisler (launchd, `deploy/launchd/`)
 
 | Servis | Komut | İş |
 |---|---|---|
@@ -55,8 +55,17 @@ Tek kullanıcı, tek konu: **Datça'da tarım amaçlı arazi** (zeytinlik, badem
 | `com.verda.agency-worker` | `verda agency-worker --continuous` | Görev kuyruğunu işler, agent döngüsünü çalıştırır, zamanlayıcıları tetikler |
 | `com.verda.jev-worker` | `verda agency-jev-worker --continuous` | Chrome'u süren yürütücü (Jev / Browser Use): Sahibinden arama, ilan okuma, gelen kutusu |
 | `com.verda.publisher` | `verda agency-publish-firestore --every 300` | 5 dakikada bir sonuçları pano biçimine çevirip Firestore'a yazar |
+| `com.verda.telegram` | `verda agency-telegram --continuous` | Telegram köprüsü (isteğe bağlı): eşleşmiş tek sohbetin sorularını sohbet agent'ına (`verda`) iletir, cevabı ve sabah günün kararlarını gönderir. Yalnız dışarı doğru bağlantı kurar; kayıt değiştirmez |
 
 `launchctl list | grep verda` ile görülür. Servisler `caffeinate` ile Mac'i uyutmaz.
+
+**Telegram'dan Verda ile konuşmak.** Sohbet agent'ı (`verda`, `agency/chat.py`) yalnız okur: adaylar (`chat.listings`), günün kararları (`chat.today`), sistemin durumu (`chat.system`), bir ilanın olguları ve geçmişi. Köprü (`agency/telegram.py`) `/bugun`, `/liste`, `/ilan <no>`, `/durum`, `/ozet` komutlarını model çağırmadan cevaplar; diğer her mesaj agent'a soru olur. Kurulum üç adımdır ve bot anahtarını yalnız sahibi girer:
+
+1. Telegram'da BotFather ile bir bot aç; verdiği anahtarı `~/Library/Application Support/Verda/secrets/telegram.env` dosyasına `VERDA_TELEGRAM_TOKEN=...` satırı olarak yaz (dosya izni 600). Anahtar depoya, kayıtlara ya da günlüklere yazılmaz.
+2. Servisi yükle (`deploy/launchd/install.sh`), bota `/start` yaz; bot bir eşleştirme kodu gösterir.
+3. Kodu bu Mac'te onayla: `verda agency-telegram-pair <kod>`. Bot bundan sonra yalnız o sohbete cevap verir; eşleşmeyi bitirmek için `verda agency-telegram-pair --forget`.
+
+Mesajlar Telegram sunucularından geçer (uçtan uca şifreli değildir). Köprünün durumu (`.local/telegram.json`) yalnız eşleşmeyi, okuma konumunu ve bekleyen soruların numarasını tutar; anahtarı ve mesaj metnini tutmaz.
 
 ### 2.3 Uzakta
 

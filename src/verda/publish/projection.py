@@ -66,8 +66,9 @@ def facts_of(store, current, mode='local', quote_cap=200):
     if ids:
         with store.transaction() as con:
             when = {r['id']: r['created_at'] for r in con.execute(f"SELECT id, created_at FROM claims WHERE id IN ({','.join('?' * len(ids))})", ids)}
+    # `ref` says where exactly a fact came from; the dashboard reads the date of the sit layer's saved copy from it ("says:<layer>@2026-10-23").
     return {k: {'value': v.get('value'), 'grade': v.get('grade'), 'source': v.get('source_kind'), 'at': iso(when.get(v.get('claim_id'))),
-                'quote': (v.get('quote') or '')[:quote_cap] or None} for k, v in shown.items()}
+                'quote': (v.get('quote') or '')[:quote_cap] or None, 'ref': v.get('source_ref') or None} for k, v in shown.items()}
 
 
 def parcel_shape(store, listing_id, mode='local', parcels=None):

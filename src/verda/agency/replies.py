@@ -1,7 +1,14 @@
 """Seller replies already read but not yet turned into facts: the agent's work list for interpreting them.
 
 Bookkeeping only (no site access): it hands over, per listing, the observation id, the seller's messages with their ids and the
-fields still unknown. The agent proposes facts with `facts.propose`; the verifier still checks every quote word for word."""
+fields still unknown. The agent proposes facts with `facts.propose`; the verifier still checks every quote word for word.
+
+Two things used to hide what a seller had said (found on 13 Nov 2026):
+- A road hint from the parcel's geometry filled the `access` field, so a seller's "there is a road" was never read as an answer about the road.
+  A hint is not the seller's word: with only a hint, the field is still open here.
+- A field a reader had marked "needs clarification" was never looked at again, also where the owner's standing rules settle it (a seller who
+  names the parcel's frontage on a road has said there is a road). Such a field is handed over once more, with the reader's note; after that
+  the note stands until the owner decides."""
 import json
 import re
 import time
@@ -15,6 +22,14 @@ RETRY_AFTER = 86400
 STATE_KEY = 'replies:attempted'
 
 
+def _open(field, facts, scope_open):
+    """Still worth reading the seller's words for: no value yet, or for the road only a hint from the parcel's geometry."""
+    from verda.facts.assemble import HINT
+    if field == 'sale_scope':
+        return scope_open
+    return field not in facts or (field == 'access' and (facts[field] or {}).get('value') == HINT)
+
+
 def has_pending(store, mode='local', now=None):
     """True when some seller answer still waits to be interpreted. Marks nothing."""
     return bool(_find(store, mode, time.time() if now is None else now, [], 1, first_only=True)[0])
@@ -26,12 +41,18 @@ def pending(store, args, *, mode='local', now=None):
     wanted = [str(x) for x in args.get('listing_ids') or []]
     out, remaining, tried = _find(store, mode, now, wanted, limit)
     if out:
-        tried.update({o['listing_id']: {'at': now, 'last': o['seller_messages'][-1]['source_ref'].split(':', 1)[1]} for o in out})
+        for o in out:
+            before = tried.get(o['listing_id'])
+            seen = set(before.get('reviewed') or []) if isinstance(before, dict) else set()
+            tried[o['listing_id']] = {'at': now, 'last': o['seller_messages'][-1]['source_ref'].split(':', 1)[1],
+                                      'reviewed': sorted(seen | {f['field'] for f in o.get('flagged') or []})}
         with store.transaction() as con:
             con.execute('INSERT INTO runtime_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at', (STATE_KEY, json.dumps(tried), now))
     return {'items': out, 'remaining_after_this': max(0, remaining - len(out)),
             'advice': 'propose_facts' if out else 'nothing_to_do',
-            'rules': "Her eksik alan için, ilgili satıcı mesajından harfi harfine alıntıyla facts.propose çağır. Genel 'sit yok' cevabı hem archaeological_sit=false hem natural_sit=false demektir. Net değilse öneri verme."}
+            'rules': "Her eksik alan için, ilgili satıcı mesajından harfi harfine alıntıyla facts.propose çağır. Genel 'sit yok' cevabı hem archaeological_sit=false hem natural_sit=false demektir. Net değilse öneri verme. "
+                     "flagged: bir okuyucunun daha önce 'netleştirme gerekli' dediği alanlar ve notu. Bunları kurallarına göre bir kez daha oku: cevap alanı netleştiriyorsa "
+                     "facts.propose ile öner (işaret kendiliğinden kalkar); gerçekten belirsizse hiçbir şey yapma, işaret durur. Yeniden işaretleme."}
 
 
 def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False):
@@ -45,7 +66,9 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
         for r in con.execute("SELECT listing_ref,id,payload,captured_at FROM observations WHERE tool='sahibinden.read_thread' AND mode=? AND json_extract(payload,'$.found')=1 ORDER BY captured_at,id", (mode,)):
             latest[r['listing_ref']] = (r['id'], r['payload'], r['captured_at'])
         from verda.facts.flags import open_flags
-        flagged = {(f['listing_ref'], f['field']) for f in open_flags(con, None, mode)}
+        flagged = {}
+        for f in open_flags(con, None, mode):
+            flagged[(f['listing_ref'], f['field'])] = f
     out, remaining = [], 0
     for listing, (observation_id, payload, read_at) in latest.items():
         if wanted and listing not in wanted:
@@ -65,8 +88,10 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
         said = fold(' '.join(str(m['text']) for m in seller))
         words = set(re.findall(r'\w+', said))
         scope_open = 'sale_scope' in (current.get('conflicts') or [])
-        missing = [f for f in FIELDS if (f not in facts if f != 'sale_scope' else scope_open) and (listing, f if f != 'sale_scope' else 'sale_scope_resolved') not in flagged
-                   and any((w in words) if w in WHOLE_WORDS else (w in said) for w in map(fold, SUBJECT[f]))]
+        spoken = [f for f in FIELDS if _open(f, facts, scope_open) and any((w in words) if w in WHOLE_WORDS else (w in said) for w in map(fold, SUBJECT[f]))]
+        noted = {f: flagged.get((listing, f if f != 'sale_scope' else 'sale_scope_resolved')) for f in spoken}
+        again = [f for f in spoken if noted[f] and f not in (mark.get('reviewed') or [])]      # marked by a reader, not yet read once more under the standing rules
+        missing = [f for f in spoken if not noted[f]] + again
         if not missing:
             continue
         remaining += 1
@@ -75,6 +100,7 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
             break
         if len(out) < limit:
             out.append({'listing_id': listing, 'observation_id': observation_id, 'missing_fields': missing, 'read_at': read_at,
+                        **({'flagged': [{'field': f, 'note': noted[f]['note'], 'quote': noted[f]['quote']} for f in again]} if again else {}),
                         'seller_messages': [{'source_ref': 'message:' + str(m['id']), 'text': str(m['text'])[:600]} for m in seller][-6:]})
     return out, remaining, tried
 

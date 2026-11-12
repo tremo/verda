@@ -287,6 +287,12 @@ def excluded_ids(store, mode='local'):
     return out
 
 
+def shown_comps(comps, limit=12):
+    """The peers as every screen shows them, their age in whole days. To a tenth of a day the age changed in a few dozen listing documents
+    at every five-minute round with nothing new to say: about 11 500 Firestore writes a day against a free quota of 20 000 (seen 13 Nov 2026)."""
+    return [{**c, 'age_days': None if c.get('age_days') is None else int(c['age_days'])} for c in (comps or [])[:limit]]
+
+
 def rank_all(store, *, mode='local', now=None, land=None):
     """The ranked rows with their new view, best first. Reads facts and listing texts from the records.
     Each row also carries what the records say beyond the score: `price_trend`, `seller`, the owner's own `mark`, the `parcel`, its `links` and its `land`
@@ -337,7 +343,7 @@ def rank_all(store, *, mode='local', now=None, land=None):
         if 'sale_scope' not in (current.get('conflicts') or []):
             estimate = model.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'], ground)
             beside = estimator.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'])
-            estimate['comps'] = (beside.get('comps') or [])[:12]
+            estimate['comps'] = shown_comps(beside.get('comps'))
             estimate['peers'] = {'fair': round(beside['fair']) if beside.get('fair') else None, 'n': beside.get('n'), 'note': beside.get('note'),
                                  'conditions': beside.get('conditions'), 'exclusions': beside.get('exclusions') or []}
         shut = enclosed.get(row['listing_id'], False) and (current.get('seen') or {}).get('corridor_enclosed', True)    # False for a several-deed sale

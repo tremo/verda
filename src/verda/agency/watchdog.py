@@ -27,7 +27,7 @@ SCAN_SILENCE = 36 * 3600     # no search page read for this long
 FULL_SCAN_EVERY = 8 * DAY
 PUBLISH_SILENCE = 20 * 60
 WORKER_SILENCE = 30 * 60
-WATCHED_TOOLS = ('sahibinden.read_listing', 'sahibinden.read_thread', 'listing.photos', 'tkgm.lookup', 'tkgm.corridor', 'tkgm.neighbors', 'sit.says', 'geo.route')
+WATCHED_TOOLS = ('sahibinden.read_listing', 'sahibinden.read_thread', 'listing.photos', 'tkgm.lookup', 'tkgm.corridor', 'tkgm.neighbors', 'sit.says', 'geo.route', 'geo.terrain')
 # (the inbox list and the search pages run on timers many times a day by design: they have no subject to loop on)
 ACTIVE = ('eligible', 'conditional', 'research_required')
 

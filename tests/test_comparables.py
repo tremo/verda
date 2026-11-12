@@ -134,8 +134,6 @@ def test_conditional_road_warning_survives_sparse_data_and_a_well_supported_fit(
         status['facts']['access']['value'] = 'corridor_conditional'
     v = estimate(data)
     assert v['fit_n'] == 108 and v['fair'] is not None and v['confidence'] == 'low'
-    row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
-    assert listing_view(row, v, 0.5, '', {'value': 'corridor_conditional'}, True)['label'] == 'Düşük güven'
     sparse = estimate(data, area=50000)
     assert sparse['fair'] is None and any('Yol erişimi koşullu' in w for w in sparse['warnings'])
 
@@ -274,20 +272,14 @@ def test_extreme_peer_does_not_pull_the_weighted_median_towards_it():
     assert after['fair'] == pytest.approx(before['fair'], rel=0.05)
 
 
-def test_weak_datca_reference_is_not_labelled_fair_or_strong_and_cannot_boost_score():
+def test_these_peers_are_shown_beside_the_expected_price_and_a_thin_reference_never_reads_as_a_strong_opportunity():
+    # Since 12 Nov 2026 the score's yardstick is value.Model (size, neighbourhood, sea, height); these peers are listed beside it for the reader.
+    # Handed to the score on its own, a low-confidence reference counts at half weight, is never "strong" and raises no "very cheap" flag.
     v = estimate(small())
     row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
     shown = listing_view(row, v, 0.5, '', {'value': 'direct'}, True)
-    assert shown['label'] == 'Düşük güven' and shown['opportunity'] == 50 and shown['score'] <= 49
-    assert shown['gap_pct'] == 96
-    assert shown['basis']['method'] == c.METHOD and shown['basis']['confidence'] == 'low'
-    assert shown['basis']['comps'] == v['comps']
-    assert all('çok ucuz' not in cap for cap in shown['caps'])  # must not trigger the manager's "very cheap" recommendation
-    row['price_tl'] = 40_000_000
-    assert listing_view(row, v, 0.5, '', {'value': 'direct'}, True)['opportunity'] == 50
-
-
-def test_medium_confidence_is_at_most_a_possible_opportunity_with_unmodelled_conditions():
-    v = estimate(market())
-    row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
-    assert listing_view(row, v, 0.5, '', {'value': 'direct'}, True)['label'] == 'Olası fırsat'
+    assert shown['gap_pct'] == 96 and shown['label'] == 'Olası fırsat'
+    assert shown['basis']['method'] == c.METHOD and shown['basis']['confidence'] == 'low' and shown['basis']['comps'] == v['comps']
+    assert all('çok ucuz' not in cap for cap in shown['caps']) and any('az veriye' in cap for cap in shown['caps'])
+    sure = listing_view(row, {**v, 'confidence': 'medium'}, 0.5, '', {'value': 'direct'}, True)
+    assert shown['opportunity'] <= sure['opportunity'] and any('çok ucuz' in cap for cap in sure['caps'])

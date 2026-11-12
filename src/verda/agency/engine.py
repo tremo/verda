@@ -242,6 +242,8 @@ def default_registry(config, store=None):
             'geo.route': lambda args, context: __import__('verda.agency.geo', fromlist=['listing_route']).listing_route(store, args, mode=context['mode']),
             'listing.photos': lambda args, context: __import__('verda.agency.photos', fromlist=['x']).save_listing_photos(store, args, mode=context['mode']),
             'sit.says': lambda args, context: __import__('verda.agency.says', fromlist=['x']).check(store, args, mode=context['mode']),
+            'geo.terrain': lambda args, context: __import__('verda.agency.terrain', fromlist=['x']).listing_terrain(store, args, mode=context['mode']),
+            'terrain.sweep': lambda args, context: __import__('verda.agency.terrain', fromlist=['x']).sweep(store, args, mode=context['mode']),
             'tkgm.neighbors': lambda args, context: __import__('verda.agency.corridor', fromlist=['x']).neighbor_types(store, args, mode=context['mode']),
             'tkgm.corridor': lambda args, context: __import__('verda.agency.corridor', fromlist=['x']).listing_corridor(store, args, mode=context['mode']),
             'facts.queue': lambda args, context: __import__('verda.agency.queue', fromlist=['x']).work_queue(store, args, mode=context['mode']),

@@ -105,5 +105,19 @@
       "inputs": {},
       "executor_tool": "watchdog.check"
     }
+  },
+  {
+    "key": "terrain-sweep",
+    "kind": "timer",
+    "next_at": "2026-11-12T10:00:00+03:00",
+    "spec": {
+      "agent": "research",
+      "interval_seconds": 1200,
+      "mode": "local",
+      "priority": 15,
+      "objective": "Arazi ölçümü süpürmesi: sınırı belli, ölçümü olmayan parselleri geo.terrain'e ver (kod, model çağrısı yok).",
+      "inputs": {},
+      "executor_tool": "terrain.sweep"
+    }
   }
 ]

@@ -126,17 +126,53 @@ def house_potential(kind, area, text=''):
     return base * (OLIVE_FACTOR if kind == 'Zeytinlik' else 1.0)
 
 
-def purpose_fit(kind, area, road, text, sit_known, hood_effect=0.0):
-    """-> (score, parts). Each part is 0-100; unknown things sit in the middle."""
+SLOPE_SCORE = ((6, 100), (12, 90), (20, 70), (30, 45), (40, 25), (math.inf, 10))        # percent: flat land works for everything, a steep one for little
+SUNNY, SHADED = ('güney', 'güneydoğu', 'güneybatı'), ('kuzey', 'kuzeydoğu', 'kuzeybatı')
+COAST_SCORE = ((500, 100), (1000, 90), (2000, 78), (3000, 65), (4000, 52), (math.inf, 40))   # metres to the sea
+UNKNOWN = 55                                                                              # an unmeasured thing sits in the middle, as everywhere here
+
+
+def _banded(value, bands):
+    return UNKNOWN if value is None else next(score for limit, score in bands if value < limit)
+
+
+def land_scores(land):
+    """0-100 for what the outline and the height model say: -> {'slope', 'aspect', 'coast'}; the middle for what was not measured."""
+    land = land or {}
+    slope = land.get('slope_pct')
+    faces = land.get('faces')
+    aspect = UNKNOWN if slope is None else 85 if faces is None else 100 if faces in SUNNY else 45 if faces in SHADED else 75      # flat land faces no way: nearly as good as south
+    return {'slope': _banded(slope, SLOPE_SCORE), 'aspect': aspect, 'coast': _banded(land.get('coast_m'), COAST_SCORE)}
+
+
+def purpose_fit(kind, area, road, text, sit_known, hood_effect=0.0, land=None):
+    """-> (score, parts). Each part is 0-100; unknown things sit in the middle. `land`: the parcel's terrain measurement (terrain.py), when there is one.
+    Sellers do not visibly price slope, the side the land faces, water or the road (value.py), so this is where two parcels of one price differ."""
     text = text or ''
     hint, water, power = bool(BUILDING_HINT.search(text)), bool(WATER_HINT.search(text)), bool(POWER_HINT.search(text))
     size = 40 if area < 2000 else 55 if area < 3000 else 70 if area < 5000 else 85 if area < 10000 else 92
-    investment = 0.35 * (100 if sit_known else 55) + 0.25 * ROAD_SCORE[road] + 0.20 * size + 0.20 * max(0, min(100, 55 + 60 * hood_effect))
+    ground = land_scores(land)
+    utilities = 55 + (25 if water else 0) + (10 if power else 0)
+    investment = 0.25 * (100 if sit_known else 55) + 0.20 * ROAD_SCORE[road] + 0.20 * size + 0.20 * ground['coast'] + 0.15 * ground['slope']
     house = house_potential(kind, area, text)
     # the buyer's order of land types: tarla > bademlik > zeytinlik
-    production = 0.35 * {'Tarla': 100, 'Bademlik': 80, 'Zeytinlik': 60}.get(kind, 50) + 0.30 * ROAD_SCORE[road] + 0.15 * (55 + (25 if water else 0) + (10 if power else 0)) + 0.20 * size
+    production = 0.25 * {'Tarla': 100, 'Bademlik': 80, 'Zeytinlik': 60}.get(kind, 50) + 0.20 * ROAD_SCORE[road] \
+        + 0.20 * (0.7 * ground['slope'] + 0.3 * ground['aspect']) + 0.15 * utilities + 0.20 * size
     total = PURPOSE['investment'] * investment + PURPOSE['house'] * house + PURPOSE['production'] * production
-    return round(total), {'investment': round(investment), 'house': round(house), 'production': round(production), 'building_hint': hint, 'water_hint': water, 'power_hint': power}
+    # What the land is worth to this buyer without the house part (almost no parcel can legally get one): the measure a price advantage is weighed with.
+    quality = (PURPOSE['investment'] * investment + PURPOSE['production'] * production) / (PURPOSE['investment'] + PURPOSE['production'])
+    return round(total), {'investment': round(investment), 'house': round(house), 'production': round(production), 'quality': round(quality),
+                          'slope': ground['slope'], 'aspect': ground['aspect'], 'coast': ground['coast'], 'measured': bool((land or {}).get('slope_pct') is not None),
+                          'building_hint': hint, 'water_hint': water, 'power_hint': power}
+
+
+# Measured on the candidates of Nov 2026: quality runs from about 56 (lowest tenth) through 69 (middle) to 80 (highest tenth).
+QUALITY_FULL, QUALITY_FLOOR, CREDIT_FLOOR = 70, 50, 0.4            # land of middling quality or better earns the whole price advantage
+
+
+def price_credit(quality):
+    """How much of a price advantage counts: all of it on good land, less on poor land (a low price there more often has a reason than is a bargain)."""
+    return max(CREDIT_FLOOR, min(1.0, (quality - QUALITY_FLOOR) / (QUALITY_FULL - QUALITY_FLOOR)))
 
 
 def combine(opportunity, purpose, proximity, price, area, gap_ln, penalties, extra=0):
@@ -164,9 +200,12 @@ def _signals(moved, points):
     return [{'kind': 'price_drop' if moved['change_pct'] < 0 else 'price_rise', 'text': 'fiyat ' + said, 'points': points}] if said else []
 
 
-def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False, hood_effect=0.0, moved=None):
-    """The new numbers for one ranked row (a dict from score.ranking); the old ones are left alone. `estimate`: comparables.Estimator.estimate, or None.
-    `moved`: signals.trend for the listing (how its asking price changed lately), or None."""
+LOW_CONFIDENCE_SHARE = 0.5      # a thinly supported expectation moves the score half as much
+
+
+def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False, hood_effect=0.0, moved=None, land=None):
+    """The new numbers for one ranked row (a dict from score.ranking); the old ones are left alone. `estimate`: value.Model.estimate, or None.
+    `moved`: signals.trend for the listing (how its asking price changed lately); `land`: its terrain measurement; either may be None."""
     kind, area, price = row['type'], row['area_m2'], row['price_tl']
     road = road_state(access, enclosed)
     extra = signals.bonus(moved)
@@ -174,7 +213,7 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     near = proximity(row['route_minutes_max'])
     basis = _basis(estimate) if estimate else None
     if fair is None:
-        purpose, parts = purpose_fit(kind, area or 0, road, text, sit_known)
+        purpose, parts = purpose_fit(kind, area or 0, road, text, sit_known, land=land)
         base_score = WEIGHTS['opportunity'] * 50 + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * near + extra     # no price judgement: the middle
         score, caps = min(49, round(base_score)), []
         taken = sum((row.get('penalties') or {}).values())            # the rule engine's point cuts (second-degree sit, easement) count with or without a price judgement
@@ -187,49 +226,45 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     rate = price / area
     scatter = estimate.get('scatter', scatter)
     gap_ln = math.log(fair / rate)
-    purpose, parts = purpose_fit(kind, area, road, text, sit_known, hood_effect)
-    opp = opportunity_score(gap_ln)
+    purpose, parts = purpose_fit(kind, area, road, text, sit_known, hood_effect, land)
+    thin = estimate.get('confidence') == 'low'
+    # Cheap is an opportunity on good land; on poor land part of the low price is the land itself. Dear stays dear whatever the land.
+    credit = price_credit(parts['quality']) if gap_ln > 0 else 1.0
+    counted = gap_ln * credit * (LOW_CONFIDENCE_SHARE if thin else 1.0)
+    opp = opportunity_score(counted)
     doubt = []
-    weak = estimate.get('confidence') == 'low'
-    if not weak and gap_ln > TOO_GOOD * scatter:
+    if gap_ln > TOO_GOOD * scatter:
         # Counted as a strong opportunity and no more until a person has checked the price and the area against the listing and TKGM.
-        opp, doubt = min(opp, opportunity_score(scatter)), ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']
-        extra = 0               # a price already too good to believe earns nothing more for having fallen
-    if estimate['tier'] == 'region':
-        # A regional estimate is only a level: a gap smaller than its own range is not a signal, and never a "strong" one.
-        opp = min(opp, opportunity_score(0.5 * scatter))
-    if weak:
-        opp, extra = 50, 0          # a weak reference is not evidence of a bargain (or of overpricing)
-        doubt.append('emsal güveni düşük: fiyat avantajı puana eklenmedi')
+        opp, extra = min(opp, opportunity_score(scatter)), 0            # a price already too good to believe earns nothing more for having fallen
+        if not thin:            # against a thinly supported expectation a large gap says little: capped all the same, but not raised as a finding
+            doubt = ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']
+    if credit < 1.0:
+        doubt.append(f'arazi kalitesi düşük ({parts["quality"]}): fiyat avantajı %{round(100 * credit)} oranında sayıldı')
+    if thin:
+        doubt.append('fiyat beklentisi az veriye dayanıyor: yarı ağırlıkla sayıldı')
     final, capped = combine(opp, purpose, near, price, area, gap_ln, row.get('penalties') or {}, extra)
     capped = doubt + capped
     if road == ENCLOSED:
         final, capped = max(0, final - ROAD_QUESTION_PENALTY), capped + ['yol: geçiş hakkı sorusu bekliyor −40']
     shown = label(gap_ln, scatter)
-    if weak:
-        final, shown = min(49, final), 'Düşük güven'
-        capped.append('emsal güveni düşük: puan en çok 49')
-    elif estimate.get('method') == comparables.METHOD and shown == 'Güçlü fırsat':
-        shown = 'Olası fırsat'      # water, slope, etc. are still unmodelled; no high-confidence grade yet
-    if estimate['tier'] == 'region' and shown in ('Güçlü fırsat', 'Olası fırsat'):
-        shown = 'Adil fiyat'
+    if shown == 'Güçlü fırsat' and (thin or credit < 1.0):
+        shown = 'Olası fırsat'      # a strong word needs both a well-supported expectation and land that deserves the price
     return {'score': final, 'opportunity': opp, 'purpose': purpose, 'proximity': near, 'label': shown, 'road': road,
             'fair_unit_price': round(fair), 'gap_pct': round(100 * (fair - rate) / fair, 1), 'caps': capped, 'parts': parts, 'basis': basis,
             'signals': _signals(moved, extra)}
 
 
 def _basis(estimate):
-    """What the fair price rests on, for the dashboard: the step used, the range and the comparables with their links."""
-    out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n'), 'size_adjusted': False}
+    """What the expected price rests on, for the dashboard: the method, the range, what moved it and by how much, and the listings beside it."""
+    out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n'), 'size_adjusted': estimate.get('method') != comparables.METHOD}
     if estimate.get('low') is not None:
         out['low'], out['high'] = round(estimate['low']), round(estimate['high'])
-    for key in ('method', 'confidence', 'effective_n', 'fit_n', 'conditions', 'warnings', 'unmodeled', 'exclusions', 'subject_issues', 'effect_pct', 'reference'):
+    for key in ('method', 'confidence', 'hood_n', 'drivers', 'reference_rate', 'size_elasticity', 'effective_n', 'fit_n', 'conditions', 'warnings', 'unmodeled', 'exclusions',
+                'subject_issues', 'effect_pct', 'reference', 'peers'):
         if key in estimate:
             out[key] = estimate[key]
-    if estimate.get('method') == comparables.METHOD:
-        out['comps'] = estimate.get('comps', [])
-    elif estimate['tier'] == 'local':
-        out['comps'] = [{'ids': c['ids'], 'rate': c['rate'], 'area': c['area'], 'adjusted': c['adjusted']} for c in estimate.get('comps', [])]
+    if 'comps' in estimate:
+        out['comps'] = estimate['comps']
     return out
 
 
@@ -252,9 +287,10 @@ def excluded_ids(store, mode='local'):
     return out
 
 
-def rank_all(store, *, mode='local', now=None):
+def rank_all(store, *, mode='local', now=None, land=None):
     """The ranked rows with their new view, best first. Reads facts and listing texts from the records.
-    Each row also carries what the records say beyond the score: `price_trend`, `seller`, the owner's own `mark`, the `parcel` and its `links`."""
+    Each row also carries what the records say beyond the score: `price_trend`, `seller`, the owner's own `mark`, the `parcel`, its `links` and its `land`
+    (the terrain measurement). `land`: {listing id: measurement} to use instead of the stored ones."""
     import json
     import time
     now = time.time() if now is None else now
@@ -265,11 +301,15 @@ def rank_all(store, *, mode='local', now=None):
         if listing not in known:
             known[listing] = fact_status(store, listing, mode=mode)
         return known[listing]
+    from verda.agency import terrain, value
     peer_rows = base.peer_rows(store, mode, status)
+    lay = terrain.stored(store, mode) if land is None else land
+    # The expectation every asking price is held against: what sellers ask for this size in this place (value.py).
+    model = value.Model(value.rows_from(peer_rows, LAND, lay), _solve)
+    scatter = model.scatter
+    # Beside it, for the reader: the parcels with the same known road, title and sit conditions (comparables.py). They are shown, not scored.
     peers = comparables.prepare(peer_rows, known, comparables.price_dates(store, mode), now)
     estimator = comparables.Estimator(peers, hood_of, LAND, _solve)
-    scatter = estimator.sigma
-    mean_effect = statistics.fmean(estimator.effects.values()) if estimator.effects else 0.0
     ranked = base.ranking(store, {'limit': 1000}, mode=mode, status=status)['ranked']
     texts = {}
     with store.transaction() as con:
@@ -292,13 +332,19 @@ def rank_all(store, *, mode='local', now=None):
         facts = current.get('facts') or {}
         sit_known = 'natural_sit' in facts and 'archaeological_sit' in facts
         # An area in dispute (the official parcel is not what the listing sells) gives a price per m2 that means nothing: no fair-price gap.
-        estimate = None if 'sale_scope' in (current.get('conflicts') or []) else estimator.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'])
-        effect = estimator.effects.get(hood_of(row['neighborhood']), mean_effect) - mean_effect       # the neighbourhood against the island's average
+        ground = lay.get(row['listing_id'])
+        estimate = None
+        if 'sale_scope' not in (current.get('conflicts') or []):
+            estimate = model.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'], ground)
+            beside = estimator.estimate(row['type'], row['area_m2'], row['neighborhood'], row['listing_id'])
+            estimate['comps'] = (beside.get('comps') or [])[:12]
+            estimate['peers'] = {'fair': round(beside['fair']) if beside.get('fair') else None, 'n': beside.get('n'), 'note': beside.get('note'),
+                                 'conditions': beside.get('conditions'), 'exclusions': beside.get('exclusions') or []}
         shut = enclosed.get(row['listing_id'], False) and (current.get('seen') or {}).get('corridor_enclosed', True)    # False for a several-deed sale
         moved = signals.trend(histories.get(row['listing_id']), now)
         parcel = facts.get('parcel_key')
-        out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, effect, moved),
-                    'price_trend': moved, 'seller': who.get(row['listing_id']), 'mark': marks.get(row['listing_id']),
+        out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, 0.0, moved, ground),
+                    'price_trend': moved, 'seller': who.get(row['listing_id']), 'mark': marks.get(row['listing_id']), 'land': ground,
                     'parcel': parcel.get('value') if isinstance(parcel, dict) else None, 'links': current.get('links') or {}})
     offices = {}
     for r in out:                                           # how many of the candidates one office is selling
@@ -311,8 +357,9 @@ def rank_all(store, *, mode='local', now=None):
     return {'ranked': out, 'scatter': scatter}
 
 
-NOTE = ('Fırsat puanı: adil fiyata göre fark (%45), amaca uygunluk (%40), Mertur yakınlığı (%15). Adil fiyat ilan fiyatlarından bir tahmindir; '
-        'resmî değerleme değildir. Geçici puanlar eksik doğrulama içerir.')
+NOTE = ('Fırsat puanı: beklenen fiyata göre fark (%45; arazi kalitesi düşükse fiyat avantajı kısmen sayılır), amaca uygunluk ve arazi kalitesi (%40), '
+        'Mertur yakınlığı (%15). Beklenen fiyat, büyüklük, mahalle, denize uzaklık ve rakıma göre ilan fiyatlarından bir tahmindir; resmî değerleme değildir. '
+        'Geçici puanlar eksik doğrulama içerir.')
 
 
 def one_ranking(store, args=None, *, mode='local'):

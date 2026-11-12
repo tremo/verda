@@ -10,6 +10,7 @@ from verda.policy import GRADES, Policy
 
 IDENTITY = 'parcel_identity'
 SCOPE = 'sale_scope'
+HINT = 'corridor_conditional'      # the access value a geometry check proposes (agency/corridor.py)
 SCOPE_MISMATCH = 0.20       # official area this far from the advertised one: the parcel looked up is not (all of) what is on sale
 
 
@@ -58,6 +59,11 @@ def _pick(field_name, claims, allowed, withhold_parcel):
                        if newest.get('observation_id') else [newest])
     if not current:
         return None, [], False, leads, []
+    if field_name == 'access' and any(c['value'] != HINT for c in current):
+        # The corridor check finds a gap beside the parcel: a hint that a road may be there, never a finding against anyone. A seller who says "there is
+        # a road" (or the owner, or a record that says there is none) settles what the hint left open; the hint neither outranks that statement nor
+        # makes it an error (two listings had their seller's "yolu var" logged as a mistake against the hint, Nov 2026).
+        current = [c for c in current if c['value'] != HINT]
     if spec.multi:
         rows = sorted(current, key=lambda c: (c['key'] or '', c['seq']))
         return [c['value'] for c in rows], rows, False, leads, []

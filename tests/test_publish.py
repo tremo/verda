@@ -210,3 +210,14 @@ def test_an_area_in_dispute_is_published_with_both_numbers():
     current = {'conflicts': ['sale_scope'], 'listing_errors': [{'field': 'sale_area_m2', 'chosen': {'value': 678.02, 'grade': 'resmi'}, 'other': {'value': 3260.0, 'grade': 'beyan'}}]}
     assert projection.area_conflict(current) == {'statedM2': 3260.0, 'officialM2': 678.02}
     assert projection.area_conflict({'conflicts': [], 'listing_errors': current['listing_errors']}) is None
+
+
+def test_a_published_fact_says_where_it_came_from_so_a_saved_sit_copy_shows_its_date(tmp_path):
+    from verda.agency.registry import AgencyConfig
+    from verda.agency.store import AgencyStore
+    store = AgencyStore(tmp_path / 'a.sqlite', AgencyConfig.load(None), supervisor_agent=None)
+    store.initialize()
+    current = {'facts': {'natural_sit': {'claim_id': None, 'value': 'none', 'grade': 'resmi', 'source_kind': 'official', 'source_ref': 'says:tabiatvarlik:VatandasSitAlani@2026-10-23', 'quote': None},
+                         'access': {'claim_id': None, 'value': 'direct', 'grade': 'beyan', 'source_kind': 'thread', 'source_ref': None, 'quote': 'yolu var'}}}
+    facts = projection.facts_of(store, current)
+    assert facts['natural_sit']['ref'] == 'says:tabiatvarlik:VatandasSitAlani@2026-10-23' and facts['access']['ref'] is None and facts['access']['quote'] == 'yolu var'

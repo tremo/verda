@@ -46,10 +46,6 @@ def rows_from(peer_rows, lands, land_of):
     return out
 
 
-def _tr(number):
-    return f'{number:.2f}'.replace('.', ',')
-
-
 def _coast(value):
     return math.log(max(float(value), 100.0) / REF_COAST)
 
@@ -158,5 +154,4 @@ class Model:
                 'confidence': confidence, 'hood_n': hood_n, 'warnings': warnings, 'drivers': drivers, 'reference_rate': round(math.exp(self.w[0])),
                 'size_elasticity': round(self.w[1], 2),
                 'note': f'Datça\'daki {len(self.rows)} parselin istenen m² fiyatından: büyüklük, mahalle, denize uzaklık ve rakıma göre beklenen fiyat. '
-                        f'Benzer bir arazi için istenen fiyat çoğu zaman bunun {_tr(math.exp(-spread))}–{_tr(math.exp(spread))} katı arasındadır. '
                         'İlan fiyatıdır, satış fiyatı değildir.'}

@@ -999,6 +999,18 @@ def test_the_corridor_tool_waits_between_calls_so_a_batch_is_not_one_long_burst(
     assert tools['tkgm.corridor'].min_interval_seconds >= 30 and tools['tkgm.corridor'].resource == tools['tkgm.lookup'].resource == 'tkgm'
 
 
+def test_a_corridor_hint_never_outranks_a_statement_about_the_road_and_never_makes_it_an_error():
+    hint = claim('access', 'corridor_conditional', 'bagimsiz', seq=1, kind='calc')
+    alone = assemble([hint])
+    assert alone.values['access'] == 'corridor_conditional'                                    # nothing else known: the hint stands, as before
+    said = assemble([hint, claim('access', 'direct', 'beyan', seq=2, kind='thread', quote='yolu da var')])
+    assert said.values['access'] == 'direct' and said.chosen['access'][0]['grade'] == 'beyan' and said.errors == [] and said.contradictions == []
+    assert assemble([hint, claim('access', 'existing_easement', 'beyan', seq=2, kind='thread')]).values['access'] == 'existing_easement'
+    assert assemble([hint, claim('access', 'none', 'beyan', seq=2, kind='thread')]).values['access'] == 'none'      # "there is no road" settles it too
+    owner = assemble([hint, claim('access', 'direct', 'beyan', seq=2, kind='thread'), claim('access', 'none', 'kullanici', seq=3, kind='user')])
+    assert owner.values['access'] == 'none'                                                     # among real statements the grades decide, as everywhere
+
+
 def test_a_corridor_candidate_becomes_a_conditional_access_fact_and_the_agent_asks_nobody_first(tmp_path):
     parcels = {'1/1': SUBJECT_RING, **NEIGHBORS, '1/9': poly(-40, -60, 70, -12)}
     store, registry = python_listing_store(tmp_path, [listing_payload(parcel_key='1/1', attributes={'ada no': '1', 'parsel no': '1'})], extra={

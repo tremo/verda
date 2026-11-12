@@ -137,5 +137,8 @@ def test_a_question_nobody_picked_up_is_withdrawn_but_one_being_answered_is_left
     running = chat.ask(store, 'cevaplanmakta olan', [], key='k2', now=402.0)
     assert store.claim(mode='local', now=403.0)['id'] == running
     assert chat.give_up(store, running, now=800.0) is False and chat.answer(store, running) == ('pending', '')
+    with store.transaction() as con:
+        con.execute("UPDATE inbox SET state='queued', turns=1, token=NULL, lease_until=NULL WHERE id=?", (running,))      # between two turns: still being answered
+    assert chat.give_up(store, running, now=801.0) is False
     other = store.submit(agent='research', objective='sohbet olmayan iş', inputs={}, request_key='other', now=404.0)
     assert chat.give_up(store, other, now=900.0) is False                                                    # only a chat question can be withdrawn this way

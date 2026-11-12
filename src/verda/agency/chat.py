@@ -141,10 +141,10 @@ def answer(store, task_id):
 
 def give_up(store, task_id, now=None):
     """A question nobody picked up in time is withdrawn, so it is not answered hours later into the void. -> True when it was withdrawn;
-    False when the agent is already on it (its answer will still come)."""
+    False when the agent is already on it, running or between two of its turns (its answer will still come)."""
     now = time.time() if now is None else now
     with store.transaction() as con:
-        task = con.execute("SELECT * FROM inbox WHERE id=? AND state='queued' AND source='chat'", (task_id,)).fetchone()
+        task = con.execute("SELECT * FROM inbox WHERE id=? AND state='queued' AND turns=0 AND source='chat'", (task_id,)).fetchone()
         if task is None:
             return False
         con.execute("UPDATE inbox SET state='cancelled',reason='chat_timed_out',pending=NULL,token=NULL,lease_until=NULL WHERE id=?", (task_id,))

@@ -386,9 +386,6 @@ class Bridge:
             outcome, text = chat.answer(self.store, task)
             note = None
             if outcome == 'done':
-                question = self.questions.get(task)
-                if question:
-                    self.history = (self.history + [(question, text)])[-chat.HISTORY_TURNS:]
                 note = text
             elif outcome == 'stopped':
                 note = f'Bu soruyu cevaplayamadım: {text}. /durum ile sisteme bakabilirsin.'
@@ -412,7 +409,9 @@ class Bridge:
                 if now - entry['at'] <= LATE_SECONDS:
                     raise                                       # kept on the list: delivered on a later round rather than lost
             self._keep(task, None)
-            self.questions.pop(task, None)
+            question = self.questions.pop(task, None)
+            if outcome == 'done' and question:
+                self.history = (self.history + [(question, text)])[-chat.HISTORY_TURNS:]
         self._brief(now)
 
     def _keep(self, task, entry):

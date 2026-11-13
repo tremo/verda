@@ -115,7 +115,16 @@ def send_loop(store, mode, now):
 def replies_waiting(store, mode, now):
     """Every seller answer ends as a fact, a flag for the user, or nothing to say. None waits a day unread."""
     from verda.agency.replies import waiting
-    late = [i for i in waiting(store, mode, now) if now - (i.get('read_at') or now) > REPLY_WAIT]
+    from verda.agency.replies import RETRY_AFTER
+
+    def late_one(i):
+        # Late: read a day ago and never handed to the reader; or handed over twice and still neither a fact nor a note; or the next hand-over is
+        # overdue. An answer handed over once today is being worked on (a field reopened today had "waited" since the day the conversation was read).
+        if now - (i.get('read_at') or now) <= REPLY_WAIT:
+            return False
+        handed = i.get('handed')
+        return not handed or handed['times'] >= 2 or now - handed['at'] > RETRY_AFTER + 2 * 3600
+    late = [i for i in waiting(store, mode, now) if late_one(i)]
     if not late:
         return []
     oldest = min(i['read_at'] for i in late)

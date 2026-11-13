@@ -22,6 +22,20 @@ RETRY_AFTER = 86400
 STATE_KEY = 'replies:attempted'
 
 
+def words_key(message):
+    """A message told by its words. Its id is made from the time label the page shows ("Dün", "2 gün önce") and so changes from one read
+    to the next; a mark keyed on the id forgot what had been handed over as soon as the label changed."""
+    import hashlib
+    from verda.facts.text import fold
+    return 'w:' + hashlib.sha1(fold(str(message.get('text') or '')).encode()).hexdigest()[:12]
+
+
+def _reviewed(mark):
+    """field -> the seller's last words when this routine read the field ('*': read, under an older mark that did not keep the words)."""
+    seen = mark.get('reviewed') if isinstance(mark, dict) else None
+    return dict(seen) if isinstance(seen, dict) else {f: '*' for f in seen or []}
+
+
 def _open(field, facts, scope_open):
     """Still worth reading the seller's words for: no value yet, or for the road only a hint from the parcel's geometry."""
     from verda.facts.assemble import HINT
@@ -42,10 +56,10 @@ def pending(store, args, *, mode='local', now=None):
     out, remaining, tried = _find(store, mode, now, wanted, limit)
     if out:
         for o in out:
-            before = tried.get(o['listing_id'])
-            seen = set(before.get('reviewed') or []) if isinstance(before, dict) else set()
-            tried[o['listing_id']] = {'at': now, 'last': o['seller_messages'][-1]['source_ref'].split(':', 1)[1],
-                                      'reviewed': sorted(seen | {f['field'] for f in o.get('flagged') or []})}
+            last, before = o.pop('last_words'), o.pop('handed', None)
+            # every field handed over now has been read by this routine for these words: a note it writes itself is not read "once more"
+            tried[o['listing_id']] = {'at': now, 'last': last, 'times': (before['times'] if before else 0) + 1,
+                                      'reviewed': {**_reviewed(tried.get(o['listing_id'])), **{f: last for f in o['missing_fields']}}}
         with store.transaction() as con:
             con.execute('INSERT INTO runtime_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at', (STATE_KEY, json.dumps(tried), now))
     return {'items': out, 'remaining_after_this': max(0, remaining - len(out)),
@@ -78,7 +92,9 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
         seller = [m for m in (json.loads(payload).get('messages') or []) if m.get('role') != 'user' and m.get('id') and str(m.get('text') or '').strip()]
         if not seller:
             continue
-        if not include_tried and now - mark.get('at', 0) < RETRY_AFTER and mark.get('last') == seller[-1]['id']:
+        last = words_key(seller[-1])
+        same = bool(mark.get('at')) and mark.get('last') in (last, seller[-1]['id'])        # these very words were handed over before
+        if same and now - mark['at'] < RETRY_AFTER and not include_tried:
             continue                             # handed over recently and nothing newer has arrived from the seller
         current = fact_status(store, listing, mode=mode)
         if (current.get('decision') or {}).get('state') in ('excluded', 'outside_search') or current.get('legacy_lifecycle') == 'excluded':
@@ -90,7 +106,10 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
         scope_open = 'sale_scope' in (current.get('conflicts') or [])
         spoken = [f for f in FIELDS if _open(f, facts, scope_open) and any((w in words) if w in WHOLE_WORDS else (w in said) for w in map(fold, SUBJECT[f]))]
         noted = {f: flagged.get((listing, f if f != 'sale_scope' else 'sale_scope_resolved')) for f in spoken}
-        again = [f for f in spoken if noted[f] and f not in (mark.get('reviewed') or [])]      # marked by a reader, not yet read once more under the standing rules
+        seen = _reviewed(mark)
+        # Marked by a reader and not yet read once more under the standing rules. A note first written after this routine was handed these very
+        # words is its own, or repeats what it had already judged: no second look.
+        again = [f for f in spoken if noted[f] and not (seen.get(f) in ('*', last) or (same and noted[f].get('first_at', 0) >= mark['at']))]
         missing = [f for f in spoken if not noted[f]] + again
         if not missing:
             continue
@@ -99,7 +118,8 @@ def _find(store, mode, now, wanted, limit, first_only=False, include_tried=False
             out.append({'listing_id': listing})
             break
         if len(out) < limit:
-            out.append({'listing_id': listing, 'observation_id': observation_id, 'missing_fields': missing, 'read_at': read_at,
+            out.append({'listing_id': listing, 'observation_id': observation_id, 'missing_fields': missing, 'read_at': read_at, 'last_words': last,
+                        **({'handed': {'at': mark['at'], 'times': int(mark.get('times') or 1)}} if same else {}),
                         **({'flagged': [{'field': f, 'note': noted[f]['note'], 'quote': noted[f]['quote']} for f in again]} if again else {}),
                         'seller_messages': [{'source_ref': 'message:' + str(m['id']), 'text': str(m['text'])[:600]} for m in seller][-6:]})
     return out, remaining, tried

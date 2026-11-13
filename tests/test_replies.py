@@ -173,3 +173,40 @@ def test_a_claim_that_should_not_stand_is_taken_back_with_its_reason_and_what_wa
                                         ('withdrawn', 'correction', 'retracted', 'Geçiş hakkı sorulmadı; okuyucunun çıkarımı.', road['claim_id'])]      # nothing deleted
     facts = fact_status(store, '1')['facts']
     assert 'access' not in facts and facts['archaeological_sit']['value'] is False                    # the other fact from the same message stands
+
+
+def test_an_answer_is_known_by_its_words_not_by_an_id_that_changes_with_every_read(tmp_path, monkeypatch):
+    # a message's id is made from the time label on the page ("Dün", "2 gün önce"): the same answer came back under another id at the next read
+    from verda.facts.flags import raise_flag
+    store = _store(tmp_path)
+    _thread(store, '1', [{'id': 'b1', 'role': 'seller', 'text': 'Kadastral yola cephe yok, dere yatağından girilir.'}], at=1.0)
+    monkeypatch.setattr('verda.agency.research.fact_status', lambda s, listing, mode: {'facts': {}, 'decision': {'state': 'research_required'}})
+    first = replies.pending(store, {}, mode='local', now=100000.0)['items']
+    assert [(i['listing_id'], i['missing_fields']) for i in first] == [('1', ['access'])] and 'last_words' not in first[0] and 'handed' not in first[0]
+    again = _thread(store, '1', [{'id': 'b2', 'role': 'seller', 'text': 'Kadastral yola cephe yok,  dere yatağından girilir.'}], at=2.0)      # read again: new id, same words
+    assert replies.has_pending(store, now=100600.0) is False
+    # the routine marks the answer itself during that run: its own note is not handed back to it for a second look, today or later
+    with store.transaction() as con:
+        assert raise_flag(con, listing_ref='1', mode='local', field='access', observation_id=again, source_ref='message:b2', quote='Kadastral yola cephe yok',
+                          note='Kadastral yol yok, geçiş hakkı sorulmadı.', now=100050.0)['status'] == 'flagged'
+    assert replies.waiting(store, now=100700.0) == [] and replies.pending(store, {}, mode='local', now=100000.0 + 3 * 86400)['advice'] == 'nothing_to_do'
+    # new words from the seller reopen it, note and all
+    _thread(store, '1', [{'id': 'b2', 'role': 'seller', 'text': 'Kadastral yola cephe yok, dere yatağından girilir.'}, {'id': 'b3', 'role': 'seller', 'text': 'Yol için geçiş hakkımız tapuda kayıtlı.'}], at=3.0)
+    reopened = replies.pending(store, {}, mode='local', now=100000.0 + 4 * 86400)['items']
+    assert [(i['listing_id'], i['missing_fields'], [f['field'] for f in i['flagged']]) for i in reopened] == [('1', ['access'], ['access'])]
+
+
+def test_an_answer_is_late_when_nobody_was_handed_it_or_when_it_was_handed_over_twice_and_still_stands_open(tmp_path, monkeypatch):
+    from verda.agency import watchdog
+    store = _store(tmp_path)
+    day = 86400.0
+    _thread(store, '1', [{'id': 'b', 'role': 'seller', 'text': 'Sit yoktur.'}], at=1.0)
+    monkeypatch.setattr('verda.agency.research.fact_status', lambda s, listing, mode: {'facts': {}, 'decision': {'state': 'research_required'}})
+    count = lambda now: sum(f['count'] for f in watchdog.replies_waiting(store, 'local', now))
+    assert count(0.5 * day) == 0                                                    # read today
+    assert count(2 * day) == 1                                                      # a day old and never handed to the reader
+    replies.pending(store, {}, mode='local', now=2 * day)
+    assert count(2 * day + 600) == 0 and count(2.9 * day) == 0                      # handed over once: being worked on
+    assert count(3 * day + 3 * 3600) == 1                                           # the next hand-over is overdue
+    replies.pending(store, {}, mode='local', now=3 * day + 60)
+    assert count(3 * day + 600) == 1                                                # handed over twice, still neither a fact nor a note: somebody must look

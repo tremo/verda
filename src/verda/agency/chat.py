@@ -1,6 +1,7 @@
 """Verda as someone to talk to: the tools the chat agent answers from, and the hand-over of a question to it.
 
-The chat agent (`verda` in default.json) has no write tool. It reads what every screen reads: the one ranking, a listing's facts, the day's
+The chat agent (`verda` in default.json) has no write tool. A change the owner asks for ("yolu var olarak düzelt", "bu ilanı sil") is only
+proposed by it, in its answer; the owner confirms the exact change in the chat and code records it as the owner's own decision. It reads what every screen reads: the one ranking, a listing's facts, the day's
 decisions and the system's own state. A question from the owner becomes a task for that agent; the `answer` it completes with is the reply.
 """
 import json
@@ -150,3 +151,58 @@ def give_up(store, task_id, now=None):
         con.execute("UPDATE inbox SET state='cancelled',reason='chat_timed_out',pending=NULL,token=NULL,lease_until=NULL WHERE id=?", (task_id,))
         store._event(con, task, 'task_cancelled', {'reason': 'chat_timed_out'}, now)
         return True
+
+
+# ---- changes the owner asks for: proposed by the agent, confirmed by the owner, recorded by code ----
+CHANGEABLE = {'access': ('direct', 'existing_easement', 'none'), 'natural_sit': ('none', 'first_degree', 'second_degree', 'third_degree'),
+              'archaeological_sit': (True, False), 'shared_title': (True, False), 'user_excluded': (True, False), 'parcel_key': None}
+FIELD_TR = {'access': 'yol', 'natural_sit': 'doğal sit', 'archaeological_sit': 'arkeolojik sit', 'shared_title': 'hisseli tapu', 'user_excluded': 'ilgilenmiyorum (ele)', 'parcel_key': 'ada/parsel'}
+VALUE_TR = {'direct': 'var (kadastral yol)', 'existing_easement': 'geçiş hakkı var', 'none': 'yok', 'first_degree': '1. derece', 'second_degree': '2. derece', 'third_degree': '3. derece', True: 'evet', False: 'hayır'}
+MAX_CHANGES = 5
+
+
+def proposed(store, task_id):
+    """The changes the agent proposes with its answer, each checked against what the owner may decide here. Anything else is dropped."""
+    with store.transaction() as con:
+        row = con.execute("SELECT result FROM inbox WHERE id=? AND state='complete' AND source='chat'", (task_id,)).fetchone()
+    try:
+        raw = ((json.loads(row['result'] or '{}') or {}).get('data') or {}).get('changes') if row else None
+    except ValueError:
+        raw = None
+    out = []
+    for c in raw if isinstance(raw, list) else []:
+        if not isinstance(c, dict) or not str(c.get('listing_id') or '').isdigit() or c.get('field') not in CHANGEABLE:
+            continue
+        field, undo = c['field'], c.get('undo') is True
+        allowed = CHANGEABLE[field]
+        if not undo and allowed is not None and not any(c.get('value') is v or (not isinstance(v, bool) and c.get('value') == v) for v in allowed):
+            continue
+        if not undo and allowed is None and not isinstance(c.get('value'), str):
+            continue
+        out.append({'listing_id': str(c['listing_id']), 'field': field, 'undo': undo, 'value': None if undo else c['value'], 'note': str(c.get('note') or '')[:200]})
+    return out[:MAX_CHANGES]
+
+
+def describe(change):
+    what = 'kararını geri al' if change['undo'] else VALUE_TR.get(change['value'], str(change['value']))
+    return f"#{change['listing_id']} · {FIELD_TR[change['field']]}: {what}" + (f" ({change['note']})" if change['note'] else '')
+
+
+def apply(store, changes, now=None):
+    """Records confirmed changes as the owner's own decisions (or takes one back). -> one line per change, saying what happened."""
+    now = time.time() if now is None else now
+    lines = []
+    for c in changes:
+        with store.transaction() as con:
+            if c['undo']:
+                done = store.facts.withdraw(con, c['listing_id'], 'local', c['field'], c['note'] or 'Telegram', now)
+                ok, why = done.get('withdrawn', 0) > 0, 'geri alınacak bir kararın yoktu'
+            else:
+                done = store.facts.decide(con, c['listing_id'], 'local', c['field'], c['value'], c['note'] or 'Telegram', now)
+                ok, why = done.get('status') == 'accepted', str(done.get('reason') or 'kabul edilmedi')
+        state = (done.get('assessment') or {}).get('state')
+        lines.append(describe(c) + (' → kaydedildi' + (f' (ilan şimdi: {STATE_TR.get(state, state)})' if state else '') if ok else f' → kaydedilmedi: {why}'))
+    return lines
+
+
+STATE_TR = {'eligible': 'uygun', 'conditional': 'koşullu', 'research_required': 'araştırılıyor', 'excluded': 'elendi', 'outside_search': 'arama dışı'}

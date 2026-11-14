@@ -28,13 +28,14 @@ API = 'https://api.telegram.org/bot{token}/{method}'
 PAIR_SECONDS = 600              # a pairing code lives this long
 MAX_PENDING = 3                 # chats that may hold a pairing code at once
 ANSWER_SECONDS = 300            # a question waits this long for the agent before the owner is told it is late
+CONFIRM_SECONDS = 600           # a proposed change waits this long for the owner's yes
 LATE_SECONDS = 1800             # a late answer is still delivered within this time, then forgotten
 CHUNK = 3900                    # Telegram takes 4096 characters per message
 BRIEF_HOUR = 9                  # local hour from which the day's decisions are sent, once a day
 STALE_SECONDS = 900             # a bridge that has not reported for this long counts as down
 HELP = ('Verda. Soru sorabilirsin ya da:\n/bugun: bugün senden beklenenler\n/liste: en yüksek puanlı adaylar (/liste 10)\n'
         '/ilan <ilan no>: bir ilanın özeti\n/durum: sistemin durumu\n/ozet kapat ya da /ozet ac: sabah özetini kapatır, açar\n\n'
-        'Buradan yalnız okurum: kayıt değiştirmem, satıcıya mesaj göndermem.')
+        'Bir ilanın bağlantısını ya da numarasını gönderirsen kayıtlardan değerlendiririm. Bir düzeltme ya da eleme istersen önce sana sorar, "evet" dersen senin kararın olarak kaydederim. Satıcıya mesaj göndermem.')
 STATE_TR = {'eligible': 'taraması bitti, uygun', 'conditional': 'taraması bitti, koşullu', 'research_required': 'araştırılıyor (puan geçici)'}
 MARK_TR = {'shortlist': 'kısa liste', 'maybe': 'belki', 'excluded': 'elendi'}
 NO_TKGM = {True: 'TKGM: resmî sorgu henüz yapılmadı', False: 'TKGM: parsel henüz belli değil'}       # by whether the listing names a parcel; a link is never made up
@@ -127,7 +128,7 @@ def load_state(store):
     if not isinstance(data, dict):
         data = {}
     return {'chat_id': data.get('chat_id'), 'pending': data.get('pending') or {}, 'offset': int(data.get('offset') or 0), 'brief_day': data.get('brief_day'),
-            'brief': data.get('brief', True) is not False, 'waiting': data.get('waiting') or {}}
+            'brief': data.get('brief', True) is not False, 'waiting': data.get('waiting') or {}, 'confirm': data.get('confirm')}
 
 
 @contextmanager
@@ -347,6 +348,17 @@ class Bridge:
             return self.send(chat_id, f"Sabah özeti {'açık' if state['brief'] else 'kapalı'}." + ('' if wanted is not None else ' Değiştirmek için: /ozet kapat ya da /ozet ac'))
         if text.startswith('/'):
             return self.send(chat_id, HELP)
+        asked = state.get('confirm')
+        if asked:                               # a change waits for a yes: only a plain yes records it, anything else drops it
+            with changing(self.store) as fresh:
+                fresh['confirm'] = None
+            word = text.lower().strip(' .!')
+            if word in ('evet', 'e', 'onay', 'onaylıyorum', 'tamam', 'kaydet') and self.now() - asked['at'] <= CONFIRM_SECONDS:
+                return self.send(chat_id, '\n'.join(chat.apply(self.store, asked['changes'], self.now())))
+            if word in ('evet', 'e', 'onay', 'onaylıyorum', 'tamam', 'kaydet'):
+                return self.send(chat_id, 'Onay süresi doldu; değişikliği yeniden iste.')
+            if word in ('hayır', 'hayir', 'h', 'vazgeç', 'vazgec', 'iptal'):
+                return self.send(chat_id, 'Vazgeçildi, hiçbir şey değişmedi.')
         if any(not w.get('late') for w in state['waiting'].values()):
             return self.send(chat_id, 'Önceki sorunu cevaplıyorum; bitince bunu yeniden yaz.')
         if len(text) > chat.QUESTION_MAX:
@@ -387,6 +399,11 @@ class Bridge:
             note = None
             if outcome == 'done':
                 note = text
+                changes = chat.proposed(self.store, task)
+                if changes:
+                    with changing(self.store) as state:
+                        state['confirm'] = {'changes': changes, 'at': now}
+                    note += '\n\nKaydedeyim mi?\n' + '\n'.join('- ' + chat.describe(c) for c in changes) + '\n"evet" yazarsan senin kararın olarak kaydederim; başka bir şey yazarsan vazgeçerim.'
             elif outcome == 'stopped':
                 note = f'Bu soruyu cevaplayamadım: {text}. /durum ile sisteme bakabilirsin.'
             elif entry.get('late'):
@@ -451,6 +468,7 @@ def run(store, *, env_file=DEFAULT_ENV, continuous=False, api_factory=Api, sleep
                 outcome, wait = ('running' if load_state(store)['chat_id'] is not None else 'waiting_pairing'), 0
             except BadToken:
                 outcome, wait = 'bad_token', 300
+                bridge = None
             except Busy as busy:
                 outcome, wait = 'busy', max(30, min(600, int(busy.retry_after or 0)))
             except Unreachable:
@@ -463,5 +481,9 @@ def run(store, *, env_file=DEFAULT_ENV, continuous=False, api_factory=Api, sleep
             pass
         if not continuous:
             return {'state': outcome}
-        if wait:
-            sleep(wait)
+        waited = 0
+        while waited < wait:                    # a corrected token is tried at once, not after the whole wait
+            sleep(min(5, wait - waited))
+            waited += 5
+            if outcome in ('no_token', 'bad_token') and read_token(env_file) != token:
+                break

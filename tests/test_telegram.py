@@ -316,3 +316,47 @@ def test_the_status_page_carries_the_bridges_line_only_where_the_bridge_runs(tmp
     assert not any('Telegram' in h['text'] for h in status.build(store, now=MORNING, running={})['health'])
     telegram.write_status(store, 'running', MORNING - 30)
     assert {'level': 'ok', 'text': 'Telegram: bağlı'} in status.build(store, now=MORNING, running={})['health']
+
+
+def test_a_change_the_owner_asks_for_is_recorded_only_after_his_yes_and_as_his_own_decision(tmp_path, monkeypatch):
+    store, _, api, clock, bridge = paired(tmp_path, monkeypatch)
+
+    def answered(update, text, changes):
+        api.say(update, text)
+        bridge.poll()
+        task = next(iter(telegram.load_state(store)['waiting']))
+        with store.transaction() as con:
+            con.execute("UPDATE inbox SET state='complete', result=? WHERE id=?", (json.dumps({'summary': 's', 'data': {'answer': 'Öneriyorum.', 'changes': changes}}), task))
+        bridge.tick()
+        return api.texts()[-1]
+    said = answered(2, '1000000001 yolu var, düzelt; 1000000002 yi sil', [
+        {'listing_id': '1000000001', 'field': 'access', 'value': 'direct', 'note': 'yerinde gördüm'}, {'listing_id': '1000000002', 'field': 'user_excluded', 'value': True},
+        {'listing_id': '1000000003', 'field': 'price_tl', 'value': 1}, {'listing_id': '1000000003', 'field': 'access', 'value': 'corridor_conditional'}, {'listing_id': 'x', 'field': 'access', 'value': 'none'}])
+    assert 'Kaydedeyim mi?' in said and '- #1000000001 · yol: var (kadastral yol) (yerinde gördüm)' in said and '- #1000000002 · ilgilenmiyorum (ele): evet' in said
+    assert '1000000003' not in said                                                        # a field or a value the owner cannot decide here is not even offered
+    with store.transaction() as con:
+        assert con.execute('SELECT count(*) FROM claims').fetchone()[0] == 0               # nothing is written before the yes
+    api.say(3, 'Evet')
+    bridge.poll()
+    assert api.texts()[-1].count('→ kaydedildi') == 2 and telegram.load_state(store)['confirm'] is None
+    with store.transaction() as con:
+        rows = [tuple(r) for r in con.execute("SELECT listing_ref, field, value, proposer, grade, status FROM claims ORDER BY seq")]
+    assert rows == [('1000000001', 'access', '"direct"', 'user', 'kullanici', 'accepted'), ('1000000002', 'user_excluded', 'true', 'user', 'kullanici', 'accepted')]
+    api.say(4, 'evet')                                                                     # a second yes is a question, not a second write
+    bridge.poll()
+    with store.transaction() as con:
+        assert con.execute('SELECT count(*) FROM claims').fetchone()[0] == 2
+        con.execute("UPDATE inbox SET state='complete', result='{}' WHERE state='queued'")
+    bridge.tick()
+    # anything but a yes drops the change; an old yes is too late
+    assert 'Kaydedeyim mi?' in answered(5, '1000000002 elemeyi geri al', [{'listing_id': '1000000002', 'field': 'user_excluded', 'undo': True}])
+    api.say(6, 'hayır')
+    bridge.poll()
+    assert api.texts()[-1] == 'Vazgeçildi, hiçbir şey değişmedi.'
+    assert 'kararını geri al' in answered(7, 'yine de geri al', [{'listing_id': '1000000002', 'field': 'user_excluded', 'undo': True}])
+    clock.at += telegram.CONFIRM_SECONDS + 1
+    api.say(8, 'evet')
+    bridge.poll()
+    assert api.texts()[-1] == 'Onay süresi doldu; değişikliği yeniden iste.'
+    with store.transaction() as con:
+        assert con.execute("SELECT count(*) FROM claims WHERE status='withdrawn'").fetchone()[0] == 0

@@ -89,7 +89,11 @@ def attention(store, *, mode='local', now=None, queue=None):
         # header counted 488 topics). A task already marked as seen stays out; a new stop of the same kind brings the topic back.
         stopped = {}
         # A chat question that could not be answered is told to the owner in the chat itself; it is not an open topic here.
-        for t in con.execute("SELECT id,agent,objective,state,reason,listing_ref,created_at FROM inbox WHERE mode=? AND state IN ('blocked','uncertain','waiting_user') AND source!='chat' ORDER BY created_at", (mode,)):
+        # A run of a timed routine that stopped is history once a later run of the same routine has finished: the routine works again. (A laptop asleep
+        # stopped nineteen such runs in a day on 13-14 Nov 2026.) A run that may have left a write half done ("uncertain") always stays.
+        for t in con.execute("""SELECT id,agent,objective,state,reason,listing_ref,created_at FROM inbox t WHERE mode=? AND state IN ('blocked','uncertain','waiting_user') AND source!='chat'
+                AND NOT (state!='uncertain' AND source LIKE 'timer:%' AND EXISTS (SELECT 1 FROM inbox n WHERE n.source=t.source AND n.mode=t.mode AND n.state='complete' AND n.created_at>t.created_at))
+                ORDER BY created_at""", (mode,)):
             if 'task:' + t['id'] not in acked:
                 stopped.setdefault((t['agent'], t['state'], t['objective'][:140], t['reason'] or ''), []).append(t)
         for (agent, state, objective, reason), group in stopped.items():

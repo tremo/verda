@@ -146,3 +146,19 @@ def test_the_same_job_stopping_for_the_same_reason_is_one_topic_and_a_new_stop_b
     con.close()
     again = [i['title'] for i in attention(store, now=100.0, queue=QUIET)['items'] if i['kind'] == 'task_stopped']
     assert 'sahibinden görevi durdu · 5 kez' in again                      # the fifth stop makes it a topic again, with the whole count
+
+
+def test_a_stopped_run_of_a_timed_routine_is_no_topic_once_a_later_run_has_finished(tmp_path):
+    store = _store(tmp_path)
+    for key, source, at in (('w1', 'timer:watchdog', 10.0), ('w2', 'timer:watchdog', 20.0), ('s1', 'timer:research-sweep', 30.0), ('u1', 'timer:watchdog', 5.0), ('m1', 'user', 6.0)):
+        store.submit(agent='manager', objective='Zamanlı iş ' + source, inputs={}, request_key=key, source=source, now=at)
+    con = sqlite3.connect(store.path); con.execute('PRAGMA foreign_keys=OFF')
+    with con:
+        con.execute("UPDATE inbox SET state='blocked', reason='worker_lost' WHERE request_key IN ('w1','s1','m1')")
+        con.execute("UPDATE inbox SET state='uncertain', reason='worker_lost' WHERE request_key='u1'")
+        con.execute("UPDATE inbox SET state='complete' WHERE request_key='w2'")
+    con.close()
+    stopped = sorted(i['detail'] for i in attention(store, now=100.0, queue=QUIET)['items'] if i['kind'] == 'task_stopped')
+    assert stopped == ['Zamanlı iş timer:research-sweep — worker_lost',        # that routine has not run since
+                       'Zamanlı iş timer:watchdog — worker_lost',              # the uncertain one: a write may be half done, it stays whatever came after
+                       'Zamanlı iş user — worker_lost']                        # not a timed routine: nothing replaces it

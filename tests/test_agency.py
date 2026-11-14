@@ -416,6 +416,22 @@ def test_a_read_call_lost_with_its_worker_is_tried_again_and_only_a_lost_write_i
     assert s2.overview()['tasks'][0]['state'] == 'uncertain' and s2.overview()['resources'][0]['halted'] == 'uncertain_execution'
 
 
+def test_a_turn_lost_while_the_model_was_still_deciding_is_tried_again_and_stops_after_three_losses(tmp_path):
+    # the Mac went to sleep in the middle of a model call: no tool was under way, nothing to be unsure about
+    s, r = setup(tmp_path)
+    root = submit(s, now=0)
+    clock, seen = 1.0, []
+    for _ in range(4):
+        assert s.claim(mode='local', now=clock)['id'] == root                 # the turn starts; the worker is lost before any decision
+        clock += 700
+        assert s.claim(mode='local', now=clock) is None                       # the lease has run out: expiry runs here, the retry waits a moment
+        task = s.overview()['tasks'][0]
+        seen.append((task['state'], task['reason']))
+        clock += 10
+    assert seen == [('queued', 'worker_lost_retry')] * 3 + [('blocked', 'worker_lost')]
+    assert s.overview()['resources'] == [] or all(x['halted'] is None for x in s.overview()['resources'])        # no source is held for it
+
+
 def test_a_task_that_keeps_losing_its_worker_is_quarantined_after_three_retries(tmp_path):
     s, r = setup(tmp_path)
     submit(s, now=0)

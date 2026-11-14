@@ -210,15 +210,16 @@ class AgencyStore:
     MAX_READ_RETRIES = 3
 
     def _lost_read_retry(self, con, task, now):
-        """A worker died in the middle of a read-only call. Nothing was changed anywhere, so the call is simply tried again,
-        up to MAX_READ_RETRIES times; after that it is quarantined like any unexplained loss."""
+        """A worker died in the middle of a read-only call, or while the model was still deciding (no call under way at all). Nothing was
+        changed anywhere, so the turn is simply tried again, up to MAX_READ_RETRIES times; after that it is quarantined like any unexplained loss.
+        The second case is what a laptop going to sleep does: on 13-14 Nov 2026 nineteen tasks in a day ended "blocked: worker_lost" that way."""
         lost = con.execute("SELECT count(*) FROM agency_events WHERE task_id=? AND kind='worker_lost'", (task['id'],)).fetchone()[0]
         return lost < self.MAX_READ_RETRIES
 
     def _expire(self, con, now):
         for task in con.execute("SELECT * FROM inbox WHERE state='running' AND lease_until<=?", (now,)).fetchall():
             calls = con.execute("SELECT * FROM tool_calls WHERE task_id=? AND state='started'", (task['id'],)).fetchall()
-            if calls and all(c['effect'] == 'read' for c in calls) and self._lost_read_retry(con, task, now):
+            if all(c['effect'] == 'read' for c in calls) and self._lost_read_retry(con, task, now):
                 for call in calls:
                     con.execute("UPDATE tool_calls SET state='failed',result=?,finished_at=? WHERE id=?", (canonical({'output': None, 'error': 'worker_lost'}), now, call['id']))
                     if call['resource']:

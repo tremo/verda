@@ -1,0 +1,20 @@
+/* Soru onayı page. The panel's CSP allows no inline style; WebKit ignores display on <summary>, so the grid sits in .arow inside it. */
+.ask{border-bottom:1px solid var(--line)}.ask:last-child{border-bottom:0}
+.ask>summary{list-style:none;cursor:pointer}
+.ask .arow{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:10px 14px}
+.ask>summary::-webkit-details-marker{display:none}
+.ask>summary:hover .arow{background:var(--soft)}
+.ask[data-choice=ask] .arow{border-left:3px solid var(--ok)}.ask[data-choice=hold] .arow{border-left:3px solid var(--warn)}
+.amain{min-width:0}.aline{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;font-size:13px}.aline a{white-space:nowrap}
+.atitle{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.asks{font-size:12px;color:var(--mut)}
+.choice{display:flex;gap:4px}.choice button{padding:3px 10px;font-size:13px;border-radius:99px}
+.choice button[aria-pressed=true][data-c=ask]{background:var(--ok-bg);color:var(--ok);border-color:var(--ok)}
+.choice button[aria-pressed=true][data-c=hold]{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}
+.choice button[data-c=exclude]:hover{color:var(--bad)}
+.detail{padding:4px 14px 14px 70px;font-size:13px}
+.detail blockquote{margin:6px 0 10px;padding:8px 10px;background:var(--soft);border-radius:8px;white-space:pre-wrap}
+.cases{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}.case{border:1px solid var(--line);border-radius:10px;padding:6px 10px;min-width:150px}
+.case b{font-size:18px;font-variant-numeric:tabular-nums}.case .d{color:var(--mut);font-size:12px}
+.up{color:var(--ok)}.down{color:var(--bad)}
+@media (max-width:640px){.ask .arow{grid-template-columns:40px minmax(0,1fr)}.choice{grid-column:1/-1}.detail{padding-left:14px}}

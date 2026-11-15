@@ -62,7 +62,7 @@ def test_scenarios_show_the_score_after_a_good_an_easement_and_a_sit_answer_and_
 def test_the_board_lists_listings_waiting_for_a_question_and_those_already_chosen(store, monkeypatch):
     ranked = [{**ROW, 'listing_id': i, 'title': 't', 'neighborhood': 'Yaka Mh.', 'missing': ['yol'], 'parcel': f'153/{i[-1]}',
                'links': {'tkgm': 'https://parselsorgu.tkgm.gov.tr/#ara/idari/100/153/' + i[-1], 'sahibinden': 'https://www.sahibinden.com/' + i},
-               'new': {'score': s, 'label': 'Adil fiyat', 'road': 'bilinmiyor'}, 'if_answered': {'now': s, 'cases': [], 'eliminates': []}}
+               'new': {'score': s, 'label': 'Adil fiyat', 'road': 'bilinmiyor', 'caps': ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']}, 'if_answered': {'now': s, 'cases': [], 'eliminates': []}}
               for i, s in (('1000000001', 50), ('1000000002', 70), ('1000000003', 60), ('1000000004', 40))]
     steps = {'1000000001': 'ask:sit', '1000000002': 'ask:access', '1000000003': 'tkgm.lookup', '1000000004': 'none'}
 
@@ -77,6 +77,7 @@ def test_the_board_lists_listings_waiting_for_a_question_and_those_already_chose
     out = approvals.board(store, now=10.0)
     assert [r['listing_id'] for r in out['rows']] == ['1000000002', '1000000001', '1000000003']      # undecided and askable first; no step and no choice: left out
     first = out['rows'][0]
+    assert first['caps'] == ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']                        # why the score may mislead is said beside it
     assert first['asks_tr'] == ['kadastral yol'] and first['text'] == 'soru 1000000002' and first['links']['tkgm'].endswith('/153/2') and first['choice'] is None
     assert out['rows'][1]['why_not'] == 'cevap bekleniyor' and out['rows'][2]['choice'] == 'hold' and out['rows'][2]['why_code'] == 'no_ask_step'
     assert out['counts'] == {'ask': 0, 'hold': 1, 'undecided': 1, 'not_askable_now': 2} and out['sender_mode'] in message.MODES

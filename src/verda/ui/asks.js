@@ -51,6 +51,7 @@
     const tk = r.links.tkgm; if (tk) { const a = el('a', 'TKGM', null, line); a.href = tk; a.target = '_blank'; a.rel = 'noopener'; } else el('span', 'TKGM: parsel yok', 'muted', line);
     const sh = r.links.sahibinden; if (sh) { const a = el('a', 'Sahibinden', null, line); a.href = sh; a.target = '_blank'; a.rel = 'noopener'; }
     el('span', [r.neighborhood, r.area_m2 ? num(r.area_m2) + ' m²' : null, money(r.price_tl)].filter(Boolean).join(' · '), 'muted', line);
+    if ((r.caps || []).length) el('span', '⚠ ' + r.caps.join(' · '), 'asks warn', main);
     el('span', r.asks_tr.length ? 'Sorulacak: ' + r.asks_tr.join(', ') + (best != null ? ' · iyi cevapla puan ' + best : '') : 'Sorulamaz: ' + (r.why_not || ''), 'asks', main);
     const ch = el('span', null, 'choice', s);
     [['ask', 'Sor'], ['hold', 'Beklet'], ['exclude', 'Ele']].forEach(([c, label]) => {

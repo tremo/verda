@@ -293,6 +293,6 @@ def test_a_price_too_good_to_believe_is_no_opportunity_until_confirmed():
     typo = listing_view({'type': 'Bademlik', 'area_m2': 4000, 'price_tl': fair * 4000 / 1000, 'route_minutes_max': 10, 'penalties': {}}, v, 0.3, '', {'value': 'direct'}, True)
     dear = listing_view({'type': 'Bademlik', 'area_m2': 4000, 'price_tl': fair * 4000 * 3, 'route_minutes_max': 10, 'penalties': {}}, v, 0.3, '', {'value': 'direct'}, True)
     plain = listing_view({'type': 'Bademlik', 'area_m2': 4000, 'price_tl': fair * 4000, 'route_minutes_max': 10, 'penalties': {}}, v, 0.3, '', {'value': 'direct'}, True)
-    assert typo['label'] == 'Fiyat şüpheli' and typo['score'] <= 49 and typo['score'] < plain['score']
+    assert typo['label'] == 'Fiyat şüpheli' and typo['score'] <= 49 and typo['opportunity'] == 50 and plain['opportunity'] == 50
     assert any('çok ucuz' in cap for cap in typo['caps'])               # raised for a check (decisions.verify_cheap)
-    assert dear['label'] in ('Pahalı', 'Adilin üstünde') and dear['score'] < plain['score']
+    assert dear['label'] in ('Pahalı', 'Adilin üstünde') and dear['opportunity'] < plain['opportunity']

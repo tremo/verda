@@ -150,7 +150,11 @@ class Model:
         if height is not None:
             drivers.append({'key': 'elevation', 'label': f'Rakım {height:.0f} m', 'pct': effect(self.w[3] * x[3])})
         spread = self.scatter * math.sqrt(1 + (leverage or 0.0))
-        return {**base, 'tier': 'model', 'fair': math.exp(value), 'low': math.exp(value - spread), 'high': math.exp(value + spread), 'scatter': self.scatter,
+        # The same parcel at Datça's overall level, without its neighbourhood's premium: the opportunity score is judged against the lower of the two
+        # (opportunity.listing_view), so a parcel is no bargain only for asking a little less than the rest of a dear neighbourhood.
+        premium = self.w[4 + self.hoods.index(hood_key)] if hood_key in self.hoods else 0.0
+        datca_fair = math.exp(value - premium) if premium > 0 else None
+        return {**base, 'tier': 'model', 'fair': math.exp(value), 'datca_fair': datca_fair, 'low': math.exp(value - spread), 'high': math.exp(value + spread), 'scatter': self.scatter,
                 'confidence': confidence, 'hood_n': hood_n, 'warnings': warnings, 'drivers': drivers, 'reference_rate': round(math.exp(self.w[0])),
                 'size_elasticity': round(self.w[1], 2),
                 'note': f'Datça\'daki {len(self.rows)} parselin istenen m² fiyatından: büyüklük, mahalle, denize uzaklık ve rakıma göre beklenen fiyat. '

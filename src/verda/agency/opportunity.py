@@ -17,7 +17,7 @@ from verda.facts.text import fold
 WEIGHTS = {'opportunity': 0.45, 'purpose': 0.40, 'proximity': 0.15}
 PURPOSE = {'investment': 0.40, 'house': 0.20, 'production': 0.40}
 IDEAL_BUDGET, MAX_BUDGET = 9_000_000, 15_000_000
-OVER_IDEAL_CAP, NEEDED_DISCOUNT_OVER_IDEAL = 60, 0.30          # above the ideal budget: capped unless this far below the fair price
+OVER_IDEAL_CAP, NEEDED_DISCOUNT_OVER_IDEAL = 45, 0.30          # above the ideal budget: capped unless this far below the fair price (60 until 15 Nov 2026: a fair 12 M listing stood 20th)
 SMALL_PARCEL, NEEDED_DISCOUNT_SMALL = 1000, 0.40
 # A building claim in the listing text earns no price allowance and no bonus: asking prices show no reliable premium for it (+7-9%, interval -15..+37%, n=462),
 # and since 4 Apr 2026 (bağ evi: Ek-1 md. 6, as amended 4 Aug 2026) almost no parcel can legally get one.
@@ -214,6 +214,16 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     fair = (estimate or {}).get('fair') if kind in LAND and area and price else None
     near = proximity(row['route_minutes_max'])
     basis = _basis(estimate) if estimate else None
+    datca = (estimate or {}).get('datca_fair')
+    if fair is not None and datca and datca < fair:
+        # Judged against the lower of the neighbourhood's level and Datça's (15 Nov 2026, the owner's rule): asking a little less than the rest of a
+        # dear neighbourhood is no bargain. The range shown moves down with it.
+        shift = datca / fair
+        basis = {**basis, 'hood_fair': round(fair), 'low': round(basis['low'] * shift), 'high': round(basis['high'] * shift),
+                 'warnings': [*(basis.get('warnings') or []), f'Mahalle primi sayılmadı: Datça geneline göre beklenen fiyat '
+                              f'{datca:,.0f} ₺/m² (mahallede {fair:,.0f} ₺/m²).'.replace(',', '.')]} if basis.get('low') is not None else \
+                {**basis, 'hood_fair': round(fair)}
+        fair = datca
     if fair is None:
         purpose, parts = purpose_fit(kind, area or 0, road, text, sit_known, land=land)
         base_score = WEIGHTS['opportunity'] * 50 + WEIGHTS['purpose'] * purpose + WEIGHTS['proximity'] * near + extra     # no price judgement: the middle

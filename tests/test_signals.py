@@ -42,9 +42,9 @@ def test_the_falling_price_shows_in_the_score_as_its_own_line_and_stops_at_the_c
     with_cut = opportunity.listing_view(row, estimate, 0.5, '', {'value': 'direct'}, True, moved=moved)
     assert with_cut['score'] == plain['score'] + signals.bonus(moved) == plain['score'] + 5
     assert with_cut['signals'] == [{'kind': 'price_drop', 'text': 'fiyat 10 günde %20 indi (2 indirim)', 'points': 5}] and plain['signals'] == []
-    dear = {**row, 'price_tl': 10e6, 'area_m2': 8000.0}                        # above the ideal budget, 22 % under the fair price where 30 % is asked: capped at 60, cut or no cut
-    assert opportunity.listing_view(dear, estimate, 0.5, '', {'value': 'direct'}, True)['score'] == 60
-    assert opportunity.listing_view(dear, estimate, 0.5, '', {'value': 'direct'}, True, moved=moved)['score'] == 60
+    dear = {**row, 'price_tl': 10e6, 'area_m2': 8000.0}                        # above the ideal budget, 22 % under the fair price where 30 % is asked: capped at 45, cut or no cut
+    assert opportunity.listing_view(dear, estimate, 0.5, '', {'value': 'direct'}, True)["score"] == 45
+    assert opportunity.listing_view(dear, estimate, 0.5, '', {'value': 'direct'}, True, moved=moved)['score'] == 45
     cheap = {**row, 'price_tl': 1e6}                                           # too good to believe: the cut earns nothing more
     doubted = opportunity.listing_view(cheap, estimate, 0.5, '', {'value': 'direct'}, True, moved=moved)
     assert doubted['signals'][0]['points'] == 0 and any('çok ucuz' in c for c in doubted['caps'])
@@ -112,3 +112,16 @@ def test_the_days_decisions_are_few_ordered_and_each_names_its_listing_with_both
     assert cheap['why'].startswith('1.000 ₺/m², beklenen ≈ 1.000 ₺/m²')
     assert decisions.as_text({'items': []}) == 'Bugün senden bekleyen bir karar yok.'
     assert decisions.money(6_500_000) == '6,5 M ₺' and decisions.money(950_000) == '950.000 ₺' and decisions.money(None) == '—'
+
+
+def test_a_listing_a_little_under_a_dear_neighbourhood_is_judged_against_datca_as_well():
+    # 15 Nov 2026: 12 M ₺ for 1.794 m² read as "Adil fiyat" (20th of 150) only because its neighbourhood asks a premium of two thirds.
+    row = {'type': 'Tarla', 'area_m2': 1794.0, 'price_tl': 12e6, 'route_minutes_max': 15.0, 'penalties': {}}
+    hood = {'tier': 'model', 'fair': 7419.0, 'low': 4553.0, 'high': 12089.0, 'scatter': 0.5, 'n': 267, 'comps': [], 'note': 'x', 'warnings': []}
+    wide = {**hood, 'datca_fair': 4470.0}
+    before, after = (opportunity.listing_view(row, e, 0.5, '', {'value': 'direct'}, True) for e in (hood, wide))
+    assert before['fair_unit_price'] == 7419 and after['fair_unit_price'] == 4470 and after['gap_pct'] < 0 and after['opportunity'] < before['opportunity']
+    assert after['basis']['hood_fair'] == 7419 and after['basis']['low'] < hood['low'] and any('Mahalle primi' in w for w in after['basis']['warnings'])
+    cheap_here = opportunity.listing_view({**row, 'price_tl': 1794 * 4000.0}, wide, 0.5, '', {'value': 'direct'}, True)
+    assert cheap_here['gap_pct'] > 0                       # under Datça's level too: still counted as cheap
+    assert opportunity.listing_view(row, {**hood, 'datca_fair': None}, 0.5, '', {'value': 'direct'}, True)['fair_unit_price'] == 7419

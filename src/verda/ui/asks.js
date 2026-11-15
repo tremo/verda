@@ -39,7 +39,7 @@
 
   const row = r => {
     const d = el('details', null, 'ask'); d.dataset.choice = r.choice || '';
-    const s = el('summary', null, null, d);
+    const s = el('div', null, 'arow', el('summary', null, null, d));
     const band = r.score >= 65 ? 'hi' : r.score >= 50 ? 'mid' : 'lo';
     const best = r.if_answered && r.if_answered.cases.length ? r.if_answered.cases[0].score : null;
     const sc = el('span', String(r.score), 'score ' + band + ' prov', s); sc.title = 'Bugünkü fırsat puanı' + (best != null ? ' · cevaplar iyi gelirse ' + best : '');

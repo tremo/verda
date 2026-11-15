@@ -90,7 +90,7 @@ def board(store, *, mode='local', now=None):
         sent = last.get(listing)
         out.append({'listing_id': listing, 'title': r.get('title'), 'neighborhood': r.get('neighborhood'), 'type': r.get('type'), 'area_m2': r.get('area_m2'),
                     'price_tl': r.get('price_tl'), 'parcel': r.get('parcel'), 'links': r.get('links') or {}, 'score': r['new']['score'], 'label': r['new']['label'],
-                    'road': r['new']['road'], 'missing': r.get('missing') or [], 'mark': r.get('mark'),
+                    'road': r['new']['road'], 'caps': r['new'].get('caps') or [], 'missing': r.get('missing') or [], 'mark': r.get('mark'),
                     'asks': draft.get('fields') or [], 'asks_tr': [message.FIELD_NAME.get(f, f) for f in draft.get('fields') or []],
                     'text': draft.get('text'), 'why_not': None if draft.get('ok') else draft.get('message'), 'why_code': None if draft.get('ok') else draft.get('reason'),
                     'choice': (chosen.get(listing) or {}).get('choice'), 'chosen_at': (chosen.get(listing) or {}).get('at'),

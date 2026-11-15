@@ -68,6 +68,10 @@ def listings(store, args=None, *, mode='local'):
         rows = [r for r in rows if (r.get('land') or {}).get('slope_pct') is not None and r['land']['slope_pct'] <= args['max_slope_pct']]
     if args.get('owner_mark'):
         rows = [r for r in rows if r['owner_mark'] == args['owner_mark']]
+    if args.get('waiting_for_seller'):                 # the listings a seller question is held back for while sending is switched off
+        from verda.agency.queue import work_queue
+        held = set((work_queue(store, {}, mode=mode).get('skipped_ids') or {}).get('waits_for_sender') or [])
+        rows = [r for r in rows if r['listing_id'] in held]
     if args.get('only_complete'):
         rows = [r for r in rows if r['state'] in ('eligible', 'conditional')]
     rows.sort(key=SORTS.get(args.get('sort') or 'score', SORTS['score']))

@@ -151,24 +151,25 @@ def test_commands_are_answered_from_the_records_without_a_model(tmp_path, monkey
 def test_a_question_goes_to_the_chat_agent_and_its_answer_comes_back_once(tmp_path, monkeypatch):
     store, _, api, clock, bridge = paired(tmp_path, monkeypatch)
     api.say(2, 'En düz arazi hangisi?')
-    api.say(3, 'bir soru daha')
+    api.say(3, 'bir de eğimi yaz')
+    api.say(4, 'yol durumunu da')
     bridge.poll()
-    assert api.texts() == ['Önceki sorunu cevaplıyorum; bitince bunu yeniden yaz.']        # one question at a time
+    assert api.texts() == []                                                               # written in several messages: kept, not sent back
     with store.transaction() as con:
         task = con.execute('SELECT * FROM inbox').fetchone()
     assert (task['agent'], task['source'], task['priority'], task['state']) == ('verda', 'chat', 90, 'queued') and json.loads(task['inputs'])['message'] == 'En düz arazi hangisi?'
     bridge.tick()
-    assert api.texts() == api.texts()[:1] and ('sendChatAction', {'chat_id': OWNER, 'action': 'typing'}) in api.calls
+    assert api.texts() == [] and ('sendChatAction', {'chat_id': OWNER, 'action': 'typing'}) in api.calls
     with store.transaction() as con:
         con.execute("UPDATE inbox SET state='complete', result=? WHERE id=?", (json.dumps({'summary': 'özet', 'data': {'answer': 'En düzü #1000000001.'}}), task['id']))
     bridge.tick()
     bridge.tick()
-    assert api.texts()[1:] == ['En düzü #1000000001.'] and telegram.load_state(store)['waiting'] == {}
-    api.say(4, 'peki ikincisi?')
-    bridge.poll()
+    assert api.texts() == ['En düzü #1000000001.'] and len(telegram.load_state(store)['waiting']) == 1
     with store.transaction() as con:
         second = con.execute("SELECT inputs FROM inbox WHERE id!=?", (task['id'],)).fetchone()
-    assert json.loads(second['inputs'])['history'] == [{'question': 'En düz arazi hangisi?', 'answer': 'En düzü #1000000001.'}]      # the thread of the talk goes with it
+    asked = json.loads(second['inputs'])
+    assert asked['message'] == 'bir de eğimi yaz\nyol durumunu da'                          # the later messages become the next question, together
+    assert asked['history'] == [{'question': 'En düz arazi hangisi?', 'answer': 'En düzü #1000000001.'}]      # the thread of the talk goes with it
     api.say(5, 'x' * (chat.QUESTION_MAX + 1))
     with store.transaction() as con:
         con.execute("UPDATE inbox SET state='blocked', reason='turn_error:ValueError' WHERE state='queued'")

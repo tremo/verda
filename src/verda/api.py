@@ -61,6 +61,12 @@ class ReviewRequest(BaseModel):
     listing_id: str | None = Field(default=None, max_length=100)
 
 
+class AskChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    choice: Literal["ask", "hold", "exclude", "clear"]
+    note: str = Field(default="", max_length=300)
+
+
 class ListingDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     field: str = Field(min_length=2, max_length=40)
@@ -345,6 +351,36 @@ def create_app(engine: Engine, token: str, workflow_store: WorkflowStore | None 
             ranking_cache.update(value=one_ranking(agency_store, {"limit": 1000}, mode="local"), at=time.time())
         value = ranking_cache["value"]
         return {**value, "ranked": value["ranked"][:limit]}
+
+    @app.get("/control/asks")
+    def asks_page():
+        return FileResponse(assets / "asks.html", headers={"Cache-Control": "no-store"})
+
+    asks_cache = {"at": 0.0, "value": None}
+
+    @app.get("/control/private/asks", dependencies=[Depends(viewer)])
+    def asks_data(fresh: bool = False):
+        if agency_store is None:
+            raise HTTPException(503, "Agency not configured")
+        # The board reads every candidate's facts and drafts its question: one calculation serves the page for a minute; a choice clears it.
+        if fresh or asks_cache["value"] is None or time.time() - asks_cache["at"] > 60:
+            from verda.agency.approvals import board
+            asks_cache.update(value=board(agency_store, mode="local"), at=time.time())
+        return {**asks_cache["value"], "csrf_token": csrf_token}
+
+    @app.post("/control/private/asks/{listing_id}", dependencies=[Depends(editor)])
+    def asks_choose(listing_id: str, command: AskChoice):
+        if agency_store is None or not re.fullmatch(r"[0-9]{6,14}", listing_id):
+            raise HTTPException(404, "Listing not found")
+        from verda.agency.approvals import choose
+        try:
+            result = choose(agency_store, listing_id, command.choice, mode="local", note=command.note, by="panel")
+        except ValueError as error:
+            raise HTTPException(409, str(error))
+        asks_cache["value"] = None
+        if command.choice == "exclude":
+            ranking_cache["value"] = attention_cache["value"] = None
+        return result
 
     @app.post("/control/private/listing/{listing_id}/decide", dependencies=[Depends(editor)])
     def listing_decide(listing_id: str, command: ListingDecision):

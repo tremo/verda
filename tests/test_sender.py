@@ -34,6 +34,8 @@ def system(tmp_path, monkeypatch):
                'seen': {'listing_read': True, 'thread_read': True, 'tkgm_looked_up': True, 'corridor_checked': True}}
     monkeypatch.setattr(research, 'fact_status', lambda store, listing, mode='local': current)
     monkeypatch.setattr(M, 'within_window', lambda now: True)
+    from verda.agency.approvals import choose
+    choose(store, ID, 'ask', now=1.0)                          # the owner said "Sor" for this listing
     con = sqlite3.connect(store.path)
     with con:
         con.execute("INSERT INTO observations(id,call_id,task_id,agent,trace_id,listing_ref,mode,tool,kind,captured_at,arguments,payload,payload_hash,fields) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -265,3 +267,22 @@ def test_the_checkpoint_reads_the_history_again_and_refuses_the_click_when_it_ch
     assert refused and refused[0]['reason'] == 'asked_before'
     assert table(store, 'SELECT state FROM outbox')[0]['state'] == 'prepared'
     assert M.gate(store, {'id': 'other', 'mode': 'local'}, {'listing_id': ID}, time.time() + 3600)['reason'] == 'asked_before'    # and the gate now says so too
+
+
+def test_no_mode_writes_to_a_listing_the_owner_has_not_marked_ask_but_the_draft_is_shown_for_the_choice(system):
+    from verda.agency.approvals import choose
+    store, _, _ = system
+    now = time.time()
+    for choice in ('hold', 'clear'):
+        choose(store, ID, choice, now=2.0)
+        for mode in ('dry_run', 'live'):
+            apply(store, [{'key': 'sender.mode', 'value': mode}])
+            verdict, _, _ = M.evaluate(store, ID, 'local', now)
+            assert verdict == {'ok': False, 'reason': 'not_approved', 'message': M.REFUSALS['not_approved']}
+    apply(store, [{'key': 'sender.mode', 'value': 'off'}])
+    shown = M.draft(store, ID, 'local', now)                          # sending off and nothing approved: the page still shows what would go
+    assert shown['ok'] and shown['text'] == sit_text() and shown['fields'] == ['natural_sit', 'archaeological_sit']
+    assert table(store, 'SELECT count(*) AS n FROM outbox')[0]['n'] == 0     # a draft writes nothing
+    choose(store, ID, 'ask', now=3.0)
+    apply(store, [{'key': 'sender.mode', 'value': 'dry_run'}])
+    assert M.evaluate(store, ID, 'local', now)[0]['ok'] is True

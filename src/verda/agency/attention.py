@@ -131,7 +131,10 @@ def attention(store, *, mode='local', now=None, queue=None):
                       'title': f"{len(ids['human'])} ilan senin incelemeni bekliyor", 'detail': 'Kaynaklar çelişiyor ya da bir iddia doğrulanamadı.', 'listings': ids['human']})
     if ids.get('waits_for_sender'):
         items.append({'key': 'ask:' + _key(*sorted(ids['waits_for_sender'])), 'kind': 'questions_waiting', 'severity': WAITING, 'since': now, 'ackable': True,
-                      'title': f"{len(ids['waits_for_sender'])} ilan satıcıya soru bekliyor", 'detail': "Mesaj gönderme kapalı (Ayarlar > Mesaj gönderme). Önce 'Deneme'yi açıp taslakları incele; bu ilanlar soru gönderilene kadar ilerlemez.", 'listings': ids['waits_for_sender']})
+                      'title': f"{len(ids['waits_for_sender'])} ilan satıcıya soru bekliyor", 'detail': "Mesaj gönderme kapalı (Ayarlar > Mesaj gönderme). Hangi ilanlara sorulacağını Soru onayı sayfasında seç; yalnız 'Sor' dediklerin sorulur.", 'listings': ids['waits_for_sender']})
+    if ids.get('waits_for_owner'):
+        items.append({'key': 'owner:' + _key(*sorted(ids['waits_for_owner'])), 'kind': 'questions_need_approval', 'severity': WAITING, 'since': now, 'ackable': True,
+                      'title': f"{len(ids['waits_for_owner'])} ilanın sorusu onayını bekliyor", 'detail': "Soru onayı sayfasında Sor, Beklet ya da Ele de; onaylamadığın ilana mesaj gitmez.", 'listings': ids['waits_for_owner']})
     with store.transaction() as con:
         from verda.agency import message
         message.ensure(con)

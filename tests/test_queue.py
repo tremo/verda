@@ -12,13 +12,17 @@ def _store(tmp_path):
     return store
 
 
-def _assessment(store, listing):
+def _assessment(store, listing, approve=True):
+    """`approve`: the owner said "Sor" for the listing (Soru onayı page); without it no question is offered."""
     import sqlite3, uuid
     con = sqlite3.connect(store.path)
     with con:
         con.execute("INSERT INTO assessments(id,listing_ref,mode,policy_version,input_fingerprint,facts,basis,conflicts,state,reasons,conditions,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (uuid.uuid4().hex, listing, 'local', 'p', uuid.uuid4().hex, '{}', '{}', '[]', 'research_required', '[]', '[]', 1.0))
     con.close()
+    if approve:
+        from verda.agency.approvals import choose
+        choose(store, listing, 'ask', now=1.0)
 
 
 def _observe_listing(store, listing, neighborhood, at=1.0):
@@ -280,3 +284,19 @@ def test_a_conversation_that_went_missing_is_read_again_before_any_question(tmp_
     monkeypatch.setattr('verda.agency.message.preview', lambda *a, **k: {'ok': False, 'reason': 'conversation_unconfirmed', 'message': 'x'})
     result = work_queue(store, {}, mode='local', status=lambda listing: ask, now=1000.0)
     assert [g['action'] for g in result['groups']] == ['sahibinden.read_thread'] and result['groups'][0]['batch'][0]['why'] == 'conversation_missing'
+
+
+def test_a_question_waits_for_the_owner_until_the_listing_is_marked_ask_and_hold_keeps_it_waiting(tmp_path, monkeypatch):
+    from verda.agency.approvals import choose
+    store = _store(tmp_path)
+    _assessment(store, '9999999991', approve=False)
+    ask = {'next_action': {'action': 'ask:sit', 'why': 'sit_status_unknown'}, 'facts': {}, 'decision': {'state': 'research_required'}}
+    monkeypatch.setattr('verda.agency.message.preview', lambda *a, **k: {'ok': True, 'fields': ['natural_sit'], 'dry_run': False})
+    first = work_queue(store, {}, mode='local', status=lambda listing: ask, now=1000.0)
+    assert first['groups'] == [] and first['skipped_ids']['waits_for_owner'] == ['9999999991']
+    choose(store, '9999999991', 'hold', now=2.0)
+    assert work_queue(store, {}, mode='local', status=lambda listing: ask, now=1000.0)['skipped_ids']['waits_for_owner'] == ['9999999991']
+    choose(store, '9999999991', 'ask', now=3.0)
+    assert [g['action'] for g in work_queue(store, {}, mode='local', status=lambda listing: ask, now=1000.0)['groups']] == ['sahibinden.send_message']
+    choose(store, '9999999991', 'clear', now=4.0)
+    assert work_queue(store, {}, mode='local', status=lambda listing: ask, now=1000.0)['groups'] == []

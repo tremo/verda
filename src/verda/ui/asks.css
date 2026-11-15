@@ -7,7 +7,7 @@
 .ask[data-choice=ask] .arow{border-left:3px solid var(--ok)}.ask[data-choice=hold] .arow{border-left:3px solid var(--warn)}
 .amain{min-width:0}.aline{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;font-size:13px}.aline a{white-space:nowrap}
 .atitle{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
-.asks{font-size:12px;color:var(--mut)}
+.asks{display:block;font-size:12px;color:var(--mut)}.asks.warn{color:var(--warn)}
 .choice{display:flex;gap:4px}.choice button{padding:3px 10px;font-size:13px;border-radius:99px}
 .choice button[aria-pressed=true][data-c=ask]{background:var(--ok-bg);color:var(--ok);border-color:var(--ok)}
 .choice button[aria-pressed=true][data-c=hold]{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}

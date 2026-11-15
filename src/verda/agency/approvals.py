@@ -60,22 +60,36 @@ def choose(store, listing_ref, choice, *, mode='local', note='', by='panel', now
     return {'choice': None if choice == 'clear' else choice}
 
 
-def board(store, *, mode='local', now=None):
-    """The approval list: every candidate the rule engine wants a seller answer for, and every listing the owner already chose for.
-    Each row: the listing (parcel, both links), today's score, what would be asked (or why nothing can be asked now), the owner's
-    choice, the last message attempt, and what the score becomes once the seller answers."""
-    from verda.agency import message, opportunity
+def drafter(store, *, mode='local', now=None):
+    """-> (hook, drafts). `hook` is handed to opportunity.rank_all as `scenarios`: it drafts each listing's question once (into `drafts`) and
+    names the fields the score scenarios follow. A draft that fails says so in its row instead of stopping the ranking."""
+    from verda.agency import message
     now = time.time() if now is None else now
     drafts = {}
 
-    def asked(listing, current):
-        """The question this listing would get, drafted once; the score scenarios follow the fields it asks."""
+    def hook(listing, current):
         if not str((current.get('next_action') or {}).get('action') or '').startswith('ask:'):
             drafts[listing] = {'ok': False, 'reason': 'no_ask_step', 'message': message.REFUSALS['no_ask_step']}
             return None
-        drafts[listing] = message.draft(store, listing, mode, now, current=current)
+        try:
+            drafts[listing] = message.draft(store, listing, mode, now, current=current)
+        except Exception as error:                  # one unreadable record must not take the whole ranking down
+            drafts[listing] = {'ok': False, 'reason': 'draft_failed', 'message': f'Soru taslağı hazırlanamadı ({type(error).__name__})'}
+            return None
         return drafts[listing].get('fields') if drafts[listing].get('ok') else None      # nothing to send now (a reply is awaited): every open field
-    ranked = opportunity.rank_all(store, mode=mode, now=now, scenarios=asked)['ranked']
+    return hook, drafts
+
+
+def board(store, *, mode='local', now=None, ranked=None, drafts=None):
+    """The approval list: every candidate the rule engine wants a seller answer for, and every listing the owner already chose for.
+    Each row: the listing (parcel, both links), today's score, what would be asked (or why nothing can be asked now), the owner's
+    choice, the last message attempt, and what the score becomes once the seller answers.
+    `ranked`, `drafts`: a ranking already made with `drafter`'s hook (the publisher's one pass); without them both are made here."""
+    from verda.agency import message, opportunity
+    now = time.time() if now is None else now
+    if ranked is None:
+        hook, drafts = drafter(store, mode=mode, now=now)
+        ranked = opportunity.rank_all(store, mode=mode, now=now, scenarios=hook)['ranked']
     with store.transaction() as con:
         chosen = choices(con, mode)
         message.ensure(con)
@@ -84,7 +98,7 @@ def board(store, *, mode='local', now=None):
     out = []
     for r in ranked:
         listing = r['listing_id']
-        draft = drafts.get(listing) or {}
+        draft = drafts.get(listing) or {'ok': False, 'reason': 'no_ask_step', 'message': message.REFUSALS['no_ask_step']}
         if draft.get('reason') == 'no_ask_step' and listing not in chosen:
             continue
         sent = last.get(listing)
@@ -101,3 +115,24 @@ def board(store, *, mode='local', now=None):
     return {'rows': out, 'sender_mode': message.mode_of(store),
             'counts': {'ask': sum(x['choice'] == 'ask' for x in out), 'hold': sum(x['choice'] == 'hold' for x in out),
                        'undecided': sum(x['choice'] is None for x in askable), 'not_askable_now': len(out) - len(askable)}}
+
+
+def import_dashboard(store, docs, *, mode='local', now=None):
+    """The choices made on the dashboard (`askChoice` {value: 'ask' | 'hold' | '', at} in each listingFeedback document) recorded once each.
+    -> how many were applied. A choice made here later (panel, Telegram) is not overwritten by an older one from the dashboard: only a
+    dashboard choice not seen before is applied, and it is applied as of when it arrives."""
+    now = time.time() if now is None else now
+    applied = 0
+    with store.transaction() as con:
+        ensure(con)
+        seen = {r['note'] for r in con.execute("SELECT note FROM ask_choices WHERE by='dashboard' AND mode=?", (mode,))}
+    for listing, doc in docs:
+        choice = doc.get('askChoice')
+        if not isinstance(choice, dict) or choice.get('value') not in ('ask', 'hold', '') or not str(listing).isdigit():
+            continue
+        signature = f"pano:{choice.get('value')}@{choice.get('at')}"
+        if signature in seen:
+            continue
+        choose(store, str(listing), choice['value'] or 'clear', mode=mode, note=signature, by='dashboard', now=now)
+        applied += 1
+    return applied

@@ -105,3 +105,31 @@ def test_the_panel_page_shows_the_board_and_records_a_choice_only_with_the_csrf_
         assert client.post('/control/private/asks/abc', json={'choice': 'ask'}, headers=headers).status_code == 404
     with s.transaction() as con:
         assert approvals.approved(con, '1000000001')
+
+
+def test_a_choice_made_on_the_dashboard_is_recorded_once_and_a_later_one_here_is_not_overwritten(store):
+    docs = [('1000000001', {'askChoice': {'value': 'ask', 'at': '2026-11-15T09:00:00Z'}}), ('1000000002', {'askChoice': {'value': 'hold', 'at': 't'}}),
+            ('1000000003', {'askChoice': {'value': 'send', 'at': 't'}}), ('1000000004', {'note': 'yalnız not'})]
+    assert approvals.import_dashboard(store, docs, now=1.0) == 2
+    assert approvals.import_dashboard(store, docs, now=2.0) == 0                                     # the same choice again: nothing
+    approvals.choose(store, '1000000001', 'hold', by='telegram', now=3.0)
+    assert approvals.import_dashboard(store, docs, now=4.0) == 0
+    with store.transaction() as con:
+        assert {k: v['choice'] for k, v in approvals.choices(con).items()} == {'1000000001': 'hold', '1000000002': 'hold'}
+    docs[0] = ('1000000001', {'askChoice': {'value': '', 'at': '2026-11-15T10:00:00Z'}})              # taken back on the dashboard later
+    assert approvals.import_dashboard(store, docs, now=5.0) == 1
+    with store.transaction() as con:
+        assert approvals.choice_of(con, '1000000001') is None
+
+
+def test_the_dashboard_document_carries_what_the_page_shows_and_iso_dates():
+    from verda.publish.projection import ask_board
+    row = {'listing_id': '1000000001', 'title': 't', 'neighborhood': 'Yaka Mh.', 'type': 'Tarla', 'area_m2': 5000.0, 'price_tl': 4e6, 'parcel': '153/1',
+           'links': {'tkgm': 'https://parselsorgu.tkgm.gov.tr/#ara/idari/100/153/1', 'sahibinden': 'https://www.sahibinden.com/1000000001'}, 'score': 50, 'label': 'Adil fiyat',
+           'road': 'var', 'caps': [], 'asks': ['archaeological_sit'], 'asks_tr': ['arkeolojik sit'], 'text': 'soru', 'why_not': None, 'why_code': None, 'choice': 'ask',
+           'chosen_at': 0.0, 'mark': None, 'missing': [], 'last_message': {'state': 'confirmed', 'reason': None, 'sent_at': 86400.0, 'updated_at': 90000.0},
+           'if_answered': {'now': 50, 'cases': [], 'eliminates': []}}
+    doc = ask_board({'rows': [row], 'sender_mode': 'off', 'counts': {'ask': 1}})
+    out = doc['rows'][0]
+    assert out['lastMessage'] == {'state': 'confirmed', 'at': '1970-01-02T00:00:00+00:00'} and 'chosenAt' not in out and 'why_not' not in out and 'missing' not in out
+    assert doc['senderMode'] == 'off' and out['links']['tkgm'].endswith('/153/1')

@@ -188,6 +188,8 @@ def combine(opportunity, purpose, proximity, price, area, gap_ln, penalties, ext
 
 
 TOO_GOOD = 2.0              # a gap beyond twice the usual scatter is more often a data error (wrong area, a share, a price typo) than a bargain
+PRICE_UNCONFIRMED = 50      # such a price judged neither way: the middle, as when there is no price at all
+UNCONFIRMED_CAP = 49        # and no higher than a listing with no price judgement (listing_view's `fair is None` branch)
 UNKNOWN_ROUTE = 50          # an unknown drive time sits in the middle, like every other unknown here (the old score's 20 counted it as bad)
 
 
@@ -233,10 +235,13 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     counted = gap_ln * credit * (LOW_CONFIDENCE_SHARE if thin else 1.0)
     opp = opportunity_score(counted)
     doubt = []
-    if gap_ln > TOO_GOOD * scatter:
-        # Counted as a strong opportunity and no more until a person has checked the price and the area against the listing and TKGM.
-        opp, extra = min(opp, opportunity_score(scatter)), 0            # a price already too good to believe earns nothing more for having fallen
-        if not thin:            # against a thinly supported expectation a large gap says little: capped all the same, but not raised as a finding
+    unbelievable = gap_ln > TOO_GOOD * scatter
+    if unbelievable:
+        # Not a bargain until the price and the area are confirmed: such a gap is far more often a typo, a share or a wrong area. Until 15 Nov 2026
+        # it still counted as a strong opportunity, and a listing whose seller first typed a thousandth of the price (corrected hours later, to about
+        # three times the expected price) stood eighth of 150 as "Olası fırsat". Now such a price says nothing either way.
+        opp, extra = PRICE_UNCONFIRMED, 0
+        if not thin:            # against a thinly supported expectation a large gap says little: not believed all the same, but not raised as a finding
             doubt = ['çok ucuz görünüyor: fiyat ve alan doğrulanmalı']
     if credit < 1.0:
         doubt.append(f'arazi kalitesi düşük ({parts["quality"]}): fiyat avantajı %{round(100 * credit)} oranında sayıldı')
@@ -247,7 +252,9 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
     if road == ENCLOSED:
         final, capped = max(0, final - ROAD_QUESTION_PENALTY), capped + ['yol: geçiş hakkı sorusu bekliyor −40']
     shown = label(gap_ln, scatter)
-    if shown == 'Güçlü fırsat' and (thin or credit < 1.0):
+    if unbelievable:
+        final, shown = min(final, UNCONFIRMED_CAP), 'Fiyat şüpheli'     # ranked like a listing with no price judgement at all
+    elif shown == 'Güçlü fırsat' and (thin or credit < 1.0):
         shown = 'Olası fırsat'      # a strong word needs both a well-supported expectation and land that deserves the price
     return {'score': final, 'opportunity': opp, 'purpose': purpose, 'proximity': near, 'label': shown, 'road': road,
             'fair_unit_price': round(fair), 'gap_pct': round(100 * (fair - rate) / fair, 1), 'caps': capped, 'parts': parts, 'basis': basis,

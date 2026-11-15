@@ -278,8 +278,21 @@ def test_these_peers_are_shown_beside_the_expected_price_and_a_thin_reference_ne
     v = estimate(small())
     row = {'type': 'Zeytinlik', 'area_m2': 4000, 'price_tl': 400_000, 'route_minutes_max': 15, 'penalties': {}}
     shown = listing_view(row, v, 0.5, '', {'value': 'direct'}, True)
-    assert shown['gap_pct'] == 96 and shown['label'] == 'Olası fırsat'
+    # A gap this large (96 %) is not believed either way (15 Nov 2026): the price counts as unconfirmed, not as an opportunity.
+    assert shown['gap_pct'] == 96 and shown['label'] == 'Fiyat şüpheli' and shown['opportunity'] == 50 and shown['score'] <= 49
     assert shown['basis']['method'] == c.METHOD and shown['basis']['confidence'] == 'low' and shown['basis']['comps'] == v['comps']
     assert all('çok ucuz' not in cap for cap in shown['caps']) and any('az veriye' in cap for cap in shown['caps'])
     sure = listing_view(row, {**v, 'confidence': 'medium'}, 0.5, '', {'value': 'direct'}, True)
-    assert shown['opportunity'] <= sure['opportunity'] and any('çok ucuz' in cap for cap in sure['caps'])
+    assert sure['label'] == 'Fiyat şüpheli' and sure['opportunity'] == 50 and any('çok ucuz' in cap for cap in sure['caps'])
+
+
+def test_a_price_too_good_to_believe_is_no_opportunity_until_confirmed():
+    # A seller's typo (a thousandth of the price) was ranked eighth of 150 as "Olası fırsat" until 15 Nov 2026.
+    v = {**estimate(small()), 'confidence': 'medium'}
+    fair = v['fair']
+    typo = listing_view({'type': 'Bademlik', 'area_m2': 4000, 'price_tl': fair * 4000 / 1000, 'route_minutes_max': 10, 'penalties': {}}, v, 0.3, '', {'value': 'direct'}, True)
+    dear = listing_view({'type': 'Bademlik', 'area_m2': 4000, 'price_tl': fair * 4000 * 3, 'route_minutes_max': 10, 'penalties': {}}, v, 0.3, '', {'value': 'direct'}, True)
+    plain = listing_view({'type': 'Bademlik', 'area_m2': 4000, 'price_tl': fair * 4000, 'route_minutes_max': 10, 'penalties': {}}, v, 0.3, '', {'value': 'direct'}, True)
+    assert typo['label'] == 'Fiyat şüpheli' and typo['score'] <= 49 and typo['score'] < plain['score']
+    assert any('çok ucuz' in cap for cap in typo['caps'])               # raised for a check (decisions.verify_cheap)
+    assert dear['label'] in ('Pahalı', 'Adilin üstünde') and dear['score'] < plain['score']

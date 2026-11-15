@@ -48,7 +48,12 @@ def listings(store, args=None, *, mode='local'):
     from verda.agency import opportunity
     from verda.facts.text import fold
     args = args or {}
+    from verda.agency.approvals import choices
     rows = [_row(r) for r in opportunity.rank_all(store, mode=mode)['ranked']]
+    with store.transaction() as con:
+        chosen = choices(con, mode)
+    for r in rows:
+        r['ask_choice'] = (chosen.get(r['listing_id']) or {}).get('choice')      # the owner's word on a seller question: ask, hold or none yet
     total = len(rows)
     wanted = {str(i) for i in args.get('ids') or []}
     if wanted:
@@ -68,9 +73,10 @@ def listings(store, args=None, *, mode='local'):
         rows = [r for r in rows if (r.get('land') or {}).get('slope_pct') is not None and r['land']['slope_pct'] <= args['max_slope_pct']]
     if args.get('owner_mark'):
         rows = [r for r in rows if r['owner_mark'] == args['owner_mark']]
-    if args.get('waiting_for_seller'):                 # the listings a seller question is held back for while sending is switched off
+    if args.get('waiting_for_seller'):                 # the listings a seller question is held back for: sending off, or the owner has not said "ask"
         from verda.agency.queue import work_queue
-        held = set((work_queue(store, {}, mode=mode).get('skipped_ids') or {}).get('waits_for_sender') or [])
+        skipped = work_queue(store, {}, mode=mode).get('skipped_ids') or {}
+        held = set(skipped.get('waits_for_sender') or []) | set(skipped.get('waits_for_owner') or [])
         rows = [r for r in rows if r['listing_id'] in held]
     if args.get('only_complete'):
         rows = [r for r in rows if r['state'] in ('eligible', 'conditional')]
@@ -159,9 +165,10 @@ def give_up(store, task_id, now=None):
 
 # ---- changes the owner asks for: proposed by the agent, confirmed by the owner, recorded by code ----
 CHANGEABLE = {'access': ('direct', 'existing_easement', 'none'), 'natural_sit': ('none', 'first_degree', 'second_degree', 'third_degree'),
-              'archaeological_sit': (True, False), 'shared_title': (True, False), 'user_excluded': (True, False), 'parcel_key': None}
-FIELD_TR = {'access': 'yol', 'natural_sit': 'doğal sit', 'archaeological_sit': 'arkeolojik sit', 'shared_title': 'hisseli tapu', 'user_excluded': 'ilgilenmiyorum (ele)', 'parcel_key': 'ada/parsel'}
-VALUE_TR = {'direct': 'var (kadastral yol)', 'existing_easement': 'geçiş hakkı var', 'none': 'yok', 'first_degree': '1. derece', 'second_degree': '2. derece', 'third_degree': '3. derece', True: 'evet', False: 'hayır'}
+              'archaeological_sit': (True, False), 'shared_title': (True, False), 'user_excluded': (True, False), 'parcel_key': None,
+              'ask_choice': ('ask', 'hold')}
+FIELD_TR = {'access': 'yol', 'natural_sit': 'doğal sit', 'archaeological_sit': 'arkeolojik sit', 'shared_title': 'hisseli tapu', 'user_excluded': 'ilgilenmiyorum (ele)', 'parcel_key': 'ada/parsel', 'ask_choice': 'satıcıya soru'}
+VALUE_TR = {'direct': 'var (kadastral yol)', 'existing_easement': 'geçiş hakkı var', 'none': 'yok', 'first_degree': '1. derece', 'second_degree': '2. derece', 'third_degree': '3. derece', True: 'evet', False: 'hayır', 'ask': 'sorulsun', 'hold': 'beklesin'}
 MAX_CHANGES = 5
 
 
@@ -197,6 +204,11 @@ def apply(store, changes, now=None):
     now = time.time() if now is None else now
     lines = []
     for c in changes:
+        if c['field'] == 'ask_choice':                  # not a fact about the land: the owner's word on writing to the seller (approvals.py)
+            from verda.agency.approvals import choose
+            choose(store, c['listing_id'], 'clear' if c['undo'] else c['value'], note=c['note'], by='telegram', now=now)
+            lines.append(describe(c) + ' → kaydedildi')
+            continue
         with store.transaction() as con:
             if c['undo']:
                 done = store.facts.withdraw(con, c['listing_id'], 'local', c['field'], c['note'] or 'Telegram', now)

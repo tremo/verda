@@ -254,6 +254,51 @@ def listing_view(row, estimate, scatter, text, access, sit_known, enclosed=False
             'signals': _signals(moved, extra)}
 
 
+def _value(fact):
+    return fact.get('value') if isinstance(fact, dict) else None
+
+
+def answer_scenarios(row, estimate, scatter, text, facts, enclosed, moved, land, asks=None):
+    """What the score becomes once the seller answers what is still open about the road and the sit, with the same expected price,
+    land and penalties as today. `asks`: the fields the question asks (message.ASK_ORDER names); None: every open one.
+    -> {'now', 'cases': [{'label', 'score', 'detail'}], 'eliminates': [...]}.
+    Only the road and the sit move the score; a parcel number moves it only through the checks it opens (TKGM road and sit)."""
+    from verda.policy import Policy
+    cut = Policy().penalties
+    asked = (lambda f: True) if asks is None else (lambda f: f in asks)
+    access, natural = _value(facts.get('access')), _value(facts.get('natural_sit'))
+    road_open = access not in ('direct', 'existing_easement', 'none') and asked('access')
+    natural_open = natural in (None, 'unknown') and asked('natural_sit')
+    arch_open = _value(facts.get('archaeological_sit')) is None and asked('archaeological_sit')
+    sit_after = ('natural_sit' in facts or natural_open) and ('archaeological_sit' in facts or arch_open)
+    kept = {k: v for k, v in (row.get('penalties') or {}).items()
+            if not (road_open and k.startswith('access_')) and not (natural_open and k.startswith('natural_sit_'))}
+
+    def score(road, natural_cut=0):
+        penalties = dict(kept)
+        if road_open and road == 'existing_easement':
+            penalties['access_existing_easement'] = cut['access_existing_easement']
+        if natural_cut:
+            penalties['natural_sit_second_degree'] = natural_cut
+        said = {'value': road} if road_open else facts.get('access')
+        return listing_view({**row, 'penalties': penalties}, estimate, scatter, text, said, sit_after, enclosed and not road_open, 0.0, moved, land)['score']
+
+    now = listing_view(row, estimate, scatter, text, facts.get('access'), 'natural_sit' in facts and 'archaeological_sit' in facts, enclosed, 0.0, moved, land)['score']
+    if not (road_open or natural_open or arch_open):
+        return {'now': now, 'cases': [], 'eliminates': []}
+    best_road = 'existing_easement' if enclosed else 'direct'
+    good = [('geçiş hakkı var' if best_road == 'existing_easement' else 'kadastral yol var') if road_open else None, 'sit yok' if natural_open or arch_open else None]
+    cases = [{'label': 'Cevaplar iyi gelirse', 'score': score(best_road), 'detail': ', '.join(g for g in good if g)}]
+    if road_open and not enclosed:
+        cases.append({'label': 'Yol yerine geçiş hakkı', 'score': score('existing_easement'),
+                      'detail': f"geçiş hakkı −{cut['access_existing_easement']}" + (', sit yok' if natural_open or arch_open else '')})
+    if natural_open:
+        cases.append({'label': '2. ya da 3. derece doğal sit', 'score': score(best_road, cut['natural_sit_second_degree']),
+                      'detail': f"doğal sit −{cut['natural_sit_second_degree']}" + (', yol iyi' if road_open else '')})
+    eliminates = (['ne yol ne geçiş hakkı'] if road_open else []) + (['1. derece doğal sit'] if natural_open else []) + (['arkeolojik sit (her derece)'] if arch_open else [])
+    return {'now': now, 'cases': cases, 'eliminates': eliminates}
+
+
 def _basis(estimate):
     """What the expected price rests on, for the dashboard: the method, the range, what moved it and by how much, and the listings beside it."""
     out = {'tier': estimate['tier'], 'note': estimate.get('note'), 'n': estimate.get('n'), 'size_adjusted': estimate.get('method') != comparables.METHOD}
@@ -293,15 +338,16 @@ def shown_comps(comps, limit=12):
     return [{**c, 'age_days': None if c.get('age_days') is None else int(c['age_days'])} for c in (comps or [])[:limit]]
 
 
-def rank_all(store, *, mode='local', now=None, land=None):
+def rank_all(store, *, mode='local', now=None, land=None, scenarios=False, known=None):
     """The ranked rows with their new view, best first. Reads facts and listing texts from the records.
     Each row also carries what the records say beyond the score: `price_trend`, `seller`, the owner's own `mark`, the `parcel`, its `links` and its `land`
-    (the terrain measurement). `land`: {listing id: measurement} to use instead of the stored ones."""
+    (the terrain measurement). `land`: {listing id: measurement} to use instead of the stored ones. `scenarios`: each row also carries
+    `if_answered` (answer_scenarios); a callable (listing id, fact status) -> the fields asked, None for every open one, False for no scenario. `known`: a dict that is filled with each listing's fact status, for a caller that needs them too."""
     import json
     import time
     now = time.time() if now is None else now
     from verda.agency.research import fact_status
-    known = {}
+    known = {} if known is None else known
 
     def status(listing):                                    # one fact read per listing for the whole ranking
         if listing not in known:
@@ -352,6 +398,10 @@ def rank_all(store, *, mode='local', now=None, land=None):
         out.append({**row, 'new': listing_view(row, estimate, scatter, texts.get(row['listing_id']), facts.get('access'), sit_known, shut, 0.0, moved, ground),
                     'price_trend': moved, 'seller': who.get(row['listing_id']), 'mark': marks.get(row['listing_id']), 'land': ground,
                     'parcel': parcel.get('value') if isinstance(parcel, dict) else None, 'links': current.get('links') or {}})
+        if scenarios:
+            asks = scenarios(row['listing_id'], current) if callable(scenarios) else None
+            if asks is not False:
+                out[-1]['if_answered'] = answer_scenarios(row, estimate, scatter, texts.get(row['listing_id']), facts, shut, moved, ground, asks)
     offices = {}
     for r in out:                                           # how many of the candidates one office is selling
         if (r['seller'] or {}).get('store'):

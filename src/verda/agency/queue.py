@@ -167,7 +167,7 @@ def work_queue(store, args, *, mode, status=None, now=None):
     from verda.agency import message
     sender_on = message.mode_of(store) != 'off'
     sender_reasons = {}
-    groups, skipped = {}, {'open_task': 0, 'stuck': 0, 'no_action': 0, 'waits_for_sender': 0, 'sender_refused': 0, 'source_halted': 0, 'needs_neighborhood': 0, 'human': 0, 'waits_for_says': 0, 'listing_changed_unreadable': 0, 'no_listing_url': 0}
+    groups, skipped = {}, {'open_task': 0, 'stuck': 0, 'no_action': 0, 'waits_for_sender': 0, 'sender_refused': 0, 'source_halted': 0, 'needs_neighborhood': 0, 'human': 0, 'waits_for_says': 0, 'listing_changed_unreadable': 0, 'no_listing_url': 0, 'waits_for_owner': 0}
     skipped_ids = {k: [] for k in skipped}
     def skip(reason, listing):
         skipped[reason] += 1
@@ -176,6 +176,9 @@ def work_queue(store, args, *, mode, status=None, now=None):
     from verda.agency.inbox import lost_conversations
     lost, queued_reads = lost_conversations(store, mode), set()
     # The sit layer answers from its saved copy while the ministry's server is closed to us; without a copy the check waits for the source.
+    from verda.agency.approvals import choices
+    with store.transaction() as con:
+        owner_ask = {k for k, v in choices(con, mode).items() if v['choice'] == 'ask'}
     says_open = 'says' not in halted or says.saved_layer(says.layer_path(store)) is not None
     for listing in listings:
         current = status(listing)
@@ -267,6 +270,8 @@ def work_queue(store, args, *, mode, status=None, now=None):
                 skip('waits_for_says', listing)         # the official sit layer is asked first
             elif not sender_on:
                 skip('waits_for_sender', listing)      # sending is switched off: the question waits
+            elif listing not in owner_ask:
+                skip('waits_for_owner', listing)       # the owner has not said to ask this one (Soru onayı page)
             elif listing in busy:
                 skip('open_task', listing)
             else:

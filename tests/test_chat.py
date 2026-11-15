@@ -142,3 +142,21 @@ def test_a_question_nobody_picked_up_is_withdrawn_but_one_being_answered_is_left
     assert chat.give_up(store, running, now=801.0) is False
     other = store.submit(agent='research', objective='sohbet olmayan iş', inputs={}, request_key='other', now=404.0)
     assert chat.give_up(store, other, now=900.0) is False                                                    # only a chat question can be withdrawn this way
+
+
+def test_the_owner_can_approve_or_hold_a_seller_question_from_the_chat_after_confirming(tmp_path, monkeypatch):
+    from verda.agency import approvals
+    store, config = make_store(tmp_path, monkeypatch)
+    proposal = [{'listing_id': '1000000001', 'field': 'ask_choice', 'value': 'ask'}, {'listing_id': '1000000002', 'field': 'ask_choice', 'value': 'hold'},
+                {'listing_id': '1000000003', 'field': 'ask_choice', 'value': 'send_now'}]
+    engine = AgentEngine(store, default_registry(config, store), {'codex': Provider([decide('complete', args={'answer': 'Önerim bu.', 'changes': proposal})])})
+    task = chat.ask(store, '1e sor, 2yi beklet', [], key='k1', now=1.0)
+    engine.step(now=2.0)
+    changes = chat.proposed(store, task)
+    assert [c['value'] for c in changes] == ['ask', 'hold']                                        # anything else is dropped
+    assert chat.apply(store, changes, now=5.0) == ['#1000000001 · satıcıya soru: sorulsun → kaydedildi', '#1000000002 · satıcıya soru: beklesin → kaydedildi']
+    rows = {r['listing_id']: r['ask_choice'] for r in chat.listings(store, {'limit': 10})['listings']}
+    assert rows == {'1000000001': 'ask', '1000000002': 'hold', '1000000003': None, '1000000004': None}
+    chat.apply(store, [{'listing_id': '1000000001', 'field': 'ask_choice', 'undo': True, 'value': None, 'note': ''}], now=6.0)
+    with store.transaction() as con:
+        assert not approvals.approved(con, '1000000001')

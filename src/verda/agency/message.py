@@ -47,7 +47,8 @@ REFUSALS = {
     'listing_changed': 'İlan metni okunduğundan beri değişti; önce yeniden okunacak.',
     'text_not_allowed': 'Mesaj metni kurallara uymuyor.',
     'asked_before': 'Bu konu satıcıyla olan konuşmada zaten geçti (daha önce soruldu ya da satıcı kendisi yazdı); tekrar sorulmaz, yanıtı sen değerlendir.',
-    'conversation_unconfirmed': 'Bu ilanın konuşması daha önce okunmuştu ama son okuma onu bulamadı; konuşma yeniden bulunmadan mesaj yazılmaz.',
+    'not_approved': 'Bu ilana soru sormayı onaylamadın (Soru onayı sayfası).',
+    'conversation_unconfirmed':'Bu ilanın konuşması daha önce okunmuştu ama son okuma onu bulamadı; konuşma yeniden bulunmadan mesaj yazılmaz.',
 }
 
 
@@ -373,9 +374,14 @@ def evaluate(store, listing_id, run_mode, now, *, task_id=None, current=None):
     from verda.agency.learning import _conversation, build, context_of, gather, unknown_fields
     from verda.agency.research import fact_status
     from verda.agency.tuning import number
+    from verda.agency.approvals import approved
     mode = mode_of(store)
     if mode == 'off' or run_mode != 'local':
         return {'ok': False, 'reason': 'sender_off', 'message': REFUSALS['sender_off']}, None, mode
+    with store.transaction() as con:
+        owner_said_ask = approved(con, listing_id, run_mode)
+    if not owner_said_ask:                      # in every mode, dry runs included: the owner picks who is written to
+        return {'ok': False, 'reason': 'not_approved', 'message': REFUSALS['not_approved']}, None, mode
     current = current or fact_status(store, listing_id, mode=run_mode)
     data = gather(store, listing_id, run_mode)
     built = build(data, unknown_fields(current), current['next_action'], context_of(current))
@@ -394,6 +400,23 @@ def evaluate(store, listing_id, run_mode, now, *, task_id=None, current=None):
     if verdict['ok']:
         verdict = history_refusal(store, listing_id, run_mode, verdict['fields']) or verdict
     return verdict, detail, mode
+
+
+def draft(store, listing_id, run_mode, now, current=None):
+    """What the question to this listing would say once the owner approves it and sending is on, or why it cannot be asked.
+    The sender's mode, the clock, the gap between messages and the owner's approval are left out; every other gate holds. Writes nothing."""
+    from verda.agency.learning import _conversation, build, context_of, gather, unknown_fields
+    from verda.agency.research import fact_status
+    current = current or fact_status(store, listing_id, mode=run_mode)
+    data = gather(store, listing_id, run_mode)
+    built = build(data, unknown_fields(current), current['next_action'], context_of(current))
+    with store.transaction() as con:
+        existing = rows(con, listing_id, run_mode)
+    verdict = plan(listing_id=listing_id, current=current, built=built, convo=_conversation(data['thread']), outbox=[o for o in existing if o['state'] != 'dry_run'],
+                   mode='dry_run', now=now, dry_runs=0, dry_run_limit=1)
+    if verdict['ok']:
+        verdict = history_refusal(store, listing_id, run_mode, verdict['fields']) or {**verdict, 'dry_run': False}
+    return verdict
 
 
 def preview(store, listing_id, run_mode, now, current=None):

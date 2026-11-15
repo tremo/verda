@@ -215,7 +215,9 @@ def build(store, *, mode='local', now=None, limit=1000):
     problems = []
     try:
         # One pass: the opportunity ranking is built on the older ranking's rows and hands them back, so the older one is not computed a second time.
-        both = opportunity.rank_all(store, mode=mode, now=now)['ranked'][:limit]
+        from verda.agency import approvals
+        hook, drafts = approvals.drafter(store, mode=mode, now=now)       # the Soru onayı board rides on the same pass
+        both = opportunity.rank_all(store, mode=mode, now=now, scenarios=hook)['ranked'][:limit]
         newer = {r['listing_id']: r['new'] for r in both}
         rows = [{k: v for k, v in r.items() if k != 'new'} for r in both]
         ranked = {'ranked': rows, 'total': len(rows), 'settled': sum(not r['provisional'] for r in rows)}
@@ -244,8 +246,30 @@ def build(store, *, mode='local', now=None, limit=1000):
             where = traceback.extract_tb(error.__traceback__)[-1]
             problems.append(f"Günün kararları hesaplanamadı ({type(error).__name__} · {where.name}:{where.lineno})")
             print('decisions.today failed:', type(error).__name__, f'{where.filename}:{where.lineno}', file=sys.stderr, flush=True)
+    extra = []
+    if both is not None:
+        try:                                         # the owner's approval list for seller questions: its own document, so the listings never wait on it
+            from verda.agency import approvals
+            extra.append(('meta', 'v2asks', ask_board(approvals.board(store, mode=mode, now=now, ranked=both, drafts=drafts))))
+        except Exception as error:
+            import sys, traceback
+            where = traceback.extract_tb(error.__traceback__)[-1]
+            problems.append(f"Soru onayı listesi hazırlanamadı ({type(error).__name__} · {where.name}:{where.lineno})")
+            print('approvals.board failed:', type(error).__name__, f'{where.filename}:{where.lineno}', file=sys.stderr, flush=True)
     from verda.publish import status as status_page
-    return docs + [('meta', 'v2', status), ('meta', 'v2status', status_page.build(store, mode=mode, now=now, problems=problems))]
+    return docs + extra + [('meta', 'v2', status), ('meta', 'v2status', status_page.build(store, mode=mode, now=now, problems=problems))]
+
+
+def ask_board(board):
+    """The approval list as the dashboard reads it: dates as ISO text, nothing the page does not show."""
+    rows = []
+    for r in board['rows']:
+        sent = r.get('last_message')
+        rows.append({k: v for k, v in {**{k: r[k] for k in ('listing_id', 'title', 'neighborhood', 'type', 'area_m2', 'price_tl', 'parcel', 'links', 'score', 'label',
+                                                            'road', 'caps', 'asks', 'asks_tr', 'text', 'why_not', 'why_code', 'choice', 'if_answered')},
+                                       'chosenAt': iso(r.get('chosen_at')),
+                                       'lastMessage': sent and {'state': sent['state'], 'at': iso(sent.get('sent_at') or sent.get('updated_at'))}}.items() if v is not None})
+    return {'rows': rows, 'senderMode': board['sender_mode'], 'counts': board['counts']}
 
 
 def digest(data):

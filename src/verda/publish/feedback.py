@@ -113,4 +113,6 @@ def import_feedback(store, firestore, *, now=None, mode='local'):
         for state_key, state in ((STATE_KEY, sorted(done)), (HELD_KEY, {l: sorted(k) for l, k in sorted(held.items())})):
             con.execute('INSERT INTO runtime_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
                         (state_key, json.dumps(state), now))
-    return {'feedback_documents': len(docs), 'user_facts_applied': applied, 'user_facts_withdrawn': withdrawn}
+    from verda.agency.approvals import import_dashboard
+    asked = import_dashboard(store, docs, mode=mode, now=now)            # "Sor / Beklet" on the dashboard's Soru onayı page
+    return {'feedback_documents': len(docs), 'user_facts_applied': applied, 'user_facts_withdrawn': withdrawn, 'ask_choices_applied': asked}

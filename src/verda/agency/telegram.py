@@ -271,6 +271,7 @@ class Bridge:
         self.store, self.api, self.now = store, api, now
         self.questions = {}                     # task id -> the question's text (memory only; the record keeps it anyway)
         self.history = []                       # (question, answer) pairs of this run, oldest first
+        self.backlog = []                       # what the owner wrote while a question was being answered: asked next, as one question
 
     # ---- out ----
     def send(self, chat_id, text):
@@ -359,12 +360,17 @@ class Bridge:
                 return self.send(chat_id, 'Onay süresi doldu; değişikliği yeniden iste.')
             if word in ('hayır', 'hayir', 'h', 'vazgeç', 'vazgec', 'iptal'):
                 return self.send(chat_id, 'Vazgeçildi, hiçbir şey değişmedi.')
-        if any(not w.get('late') for w in state['waiting'].values()):
-            return self.send(chat_id, 'Önceki sorunu cevaplıyorum; bitince bunu yeniden yaz.')
         if len(text) > chat.QUESTION_MAX:
             return self.send(chat_id, f'Soru çok uzun ({len(text)} karakter); {chat.QUESTION_MAX} karaktere sığdır.')
+        if any(not w.get('late') for w in state['waiting'].values()):
+            # People write in several messages. What comes while an answer is being prepared is kept and asked next, together, with that answer as context.
+            self.backlog.append((text, update.get('update_id')))
+            return self._typing(chat_id)
+        return self._ask(chat_id, text, update.get('update_id'))
+
+    def _ask(self, chat_id, text, update_id):
         now = self.now()
-        task = chat.ask(self.store, text, self.history, key=f"telegram:{chat_id}:{update.get('update_id')}", now=now)
+        task = chat.ask(self.store, text, self.history, key=f"telegram:{chat_id}:{update_id}", now=now)
         with changing(self.store) as state:
             state['waiting'][task] = {'chat': chat_id, 'at': now, 'late': False}
         self.questions[task] = text
@@ -429,6 +435,11 @@ class Bridge:
             question = self.questions.pop(task, None)
             if outcome == 'done' and question:
                 self.history = (self.history + [(question, text)])[-chat.HISTORY_TURNS:]
+        state = load_state(self.store)
+        if self.backlog and state['chat_id'] is not None and not any(not w.get('late') for w in state['waiting'].values()):
+            texts, last = [t for t, _ in self.backlog], self.backlog[-1][1]
+            self.backlog = []
+            self._ask(state['chat_id'], '\n'.join(texts)[:chat.QUESTION_MAX], last)
         self._brief(now)
 
     def _keep(self, task, entry):

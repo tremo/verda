@@ -17,13 +17,13 @@
   {
     "key": "daily-scan",
     "kind": "timer",
-    "next_at": "2026-10-09T09:00:00+03:00",
+    "next_at": "2026-10-09T07:30:00+03:00",
     "spec": {
       "agent": "sahibinden",
       "interval_seconds": 86400,
       "mode": "local",
       "priority": 20,
-      "objective": "Günlük yeni ilan taraması: en yeni ilanları sayfa sayfa oku, yeni ve fiyatı veya alanı değişen ilanların detayını oku.",
+      "objective": "Günlük yeni ilan taraması: en yeni ilanları sayfa sayfa oku, yeni ve fiyatı veya alanı değişen ilanların ve kısa liste/belki ilanlarının detayını oku.",
       "inputs": {
         "routine": "daily_scan"
       }

@@ -99,3 +99,29 @@ def test_inbox_plan_lists_only_conversations_that_changed(tmp_path):
              arguments={'row': {'title': 'B ilan', 'counterpart': 'Veli', 'last_at_text': '02.10.2026 11:00'}})
     out = inbox_plan(store, {}, mode='local', task_id='T')
     assert [r['title'] for r in out['to_read']] == ['A ilan'] and out['advice'] == 'read_threads' and out['counts']['skip:already_read'] == 1
+
+
+def test_marked_listings_are_read_again_daily_even_when_the_result_pages_do_not_show_them(tmp_path):
+    # 16 Nov 2026: the top shortlisted listing raised its price and a neighbour left the site; the scan saw neither, both were off its pages.
+    import json, time
+    from verda.agency.discovery import scan_delta
+    store = _store(tmp_path)
+    marks = ['4444444444:decision=shortlist@2026-11-01T10:00:00.000Z', '5555555555:decision=maybe@2026-11-01T10:00:00.000Z',
+             '6666666666:decision=excluded@2026-11-01T10:00:00.000Z', '7777777777:decision=shortlist@2026-11-01T10:00:00.000Z',
+             '8888888888:decision=shortlist@2026-11-01T10:00:00.000Z']
+    with store.transaction() as con:
+        con.execute('CREATE TABLE IF NOT EXISTS runtime_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL)')
+        con.execute("INSERT INTO runtime_settings VALUES('feedback:imported', ?, 1.0)", (json.dumps(marks),))
+    for listing in ('4444444444', '5555555555', '6666666666'):
+        _observe(store, 'OLD', 'sahibinden.read_listing', {'listing_id': listing, 'price_tl': 1e6, 'area_m2': 2000.0}, at=1.0)
+    _observe(store, 'OLD', 'sahibinden.read_listing', {'listing_id': '7777777777', 'price_tl': 1e6, 'area_m2': 2000.0}, at=time.time() - 3600)      # read an hour ago
+    _observe(store, 'OLD', 'sahibinden.read_listing', {'listing_id': '8888888888', 'unavailable': True}, at=1.0)                                    # already gone
+    card = {'listing_id': '1111111111', 'title': 'x', 'url': 'u', 'price_tl': 1e6, 'area_m2': 2000.0}
+    _observe(store, 'T', 'sahibinden.search', {'page': 1, 'has_more': True, 'listings': [card]}, at=2)
+    assert scan_delta(store, {'mode': 'daily'}, mode='local', task_id='T')['watch'] == 0          # still walking the pages: the watch comes at the end
+    _observe(store, 'T', 'sahibinden.search', {'page': 2, 'has_more': False, 'listings': []}, at=3)
+    out = scan_delta(store, {'mode': 'daily'}, mode='local', task_id='T')
+    assert out['watch'] == 2 and out['advice'] == 'read_details' and out['unread_details'] == ['1111111111', '4444444444', '5555555555']
+    for listing in ('1111111111', '4444444444', '5555555555'):
+        _observe(store, 'T', 'sahibinden.read_listing', {'listing_id': listing, 'price_tl': 1.2e6, 'area_m2': 2000.0}, at=time.time())
+    assert scan_delta(store, {'mode': 'daily'}, mode='local', task_id='T')['advice'] == 'finish'

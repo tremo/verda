@@ -9,6 +9,7 @@ import time
 from uuid import uuid4
 
 PAGE_STOP_QUIET, DAILY_MAX_PAGES, FULL_MAX_PAGES = 2, 3, 15      # defaults; the panel's settings override them
+WATCH_HOURS, WATCH_MAX = 20, 30     # the owner's shortlist and "maybe" listings are read again at least daily, whatever the result pages show
 
 
 def baseline(store):
@@ -128,6 +129,22 @@ def run_scan(store, *, mode='daily', step, sleep=time.sleep, scan_id=None, read_
             'details': details, 'stopped_early': stopped}
 
 
+def _stale_marks(store, mode, now):
+    """Listings the owner marked shortlist or maybe whose last detail read is older than WATCH_HOURS, oldest first."""
+    from verda.agency.signals import user_marks
+    marked = [l for l, mark in user_marks(store).items() if mark in ('shortlist', 'maybe')]
+    out = []
+    with store.transaction() as con:
+        for listing in marked:
+            row = con.execute("SELECT max(captured_at) AS at, max(json_extract(payload, '$.unavailable') = 1) AS gone FROM observations "
+                              "WHERE tool='sahibinden.read_listing' AND mode=? AND listing_ref=?", (mode, listing)).fetchone()
+            if row['gone']:
+                continue                                    # already seen gone; reading it again tells nothing
+            if not row['at'] or now - row['at'] >= WATCH_HOURS * 3600:
+                out.append((row['at'] or 0, listing))
+    return [l for _, l in sorted(out)]
+
+
 def scan_delta(store, args, *, mode, task_id):
     """The agent's scan helper: what the result pages read so far in *this task* brought, and whether to go on.
 
@@ -154,9 +171,13 @@ def scan_delta(store, args, *, mode, task_id):
     from verda.agency.tuning import number
     limits = (number(store, 'scan.quiet_pages'), number(store, 'scan.daily_max_pages'), number(store, 'scan.full_max_pages'))
     stop = should_stop([p['new'] + p['changed'] for p in per_page], scan_mode, last['has_more'], limits)
+    watch = []
+    if stop:        # cards past the pages read, a price raised and lowered between reads, a listing gone: the result pages miss these for marked listings
+        watch = [i for i in _stale_marks(store, mode, time.time()) if i not in wanted and i not in details][:WATCH_MAX]
+        wanted.update({i: 'watch' for i in watch})
     unread = [i for i in wanted if i not in details]
     advice = 'read_next_page' if not stop else ('read_details' if unread else 'finish')
     return {'pages_read': len(per_page), 'per_page': per_page, 'mode': scan_mode, 'advice': advice,
             'next_page': None if stop else last['page'] + 1, 'new': sum(w == 'new' for w in wanted.values()),
-            'changed': sum(w == 'changed' for w in wanted.values()), 'unread_details': unread[:40],
+            'changed': sum(w == 'changed' for w in wanted.values()), 'watch': len(watch), 'unread_details': unread[:40],
             'unread_details_total': len(unread)}

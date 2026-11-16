@@ -125,3 +125,18 @@ def test_a_listing_a_little_under_a_dear_neighbourhood_is_judged_against_datca_a
     cheap_here = opportunity.listing_view({**row, 'price_tl': 1794 * 4000.0}, wide, 0.5, '', {'value': 'direct'}, True)
     assert cheap_here['gap_pct'] > 0                       # under Datça's level too: still counted as cheap
     assert opportunity.listing_view(row, {**hood, 'datca_fair': None}, 0.5, '', {'value': 'direct'}, True)['fair_unit_price'] == 7419
+
+
+def test_a_marked_listing_whose_price_went_up_is_put_forward(tmp_path):
+    # 16 Nov 2026: the owner found out himself that his top shortlisted listing asked more again.
+    from verda.agency.registry import AgencyConfig
+    from verda.agency.store import AgencyStore
+    store = AgencyStore(tmp_path / 'a.sqlite', AgencyConfig.load(None), supervisor_agent=None)
+    store.initialize()
+    rise = signals.trend(signals.steps([(70 * DAY, 8.4e6), (90 * DAY, 6.5e6), (98 * DAY, 7.5e6)]), NOW)
+    small = signals.trend(signals.steps([(70 * DAY, 8.4e6), (90 * DAY, 6.5e6), (98 * DAY, 6.6e6)]), NOW)
+    ranked = [_row('1000000001', 78, mark='shortlist', price_trend=rise, parcel='153/57'), _row('1000000002', 70, mark='maybe', price_trend=small),
+              _row('1000000003', 50, price_trend=rise)]
+    items = decisions.today(store, now=NOW, ranked=ranked, queue={'skipped': {}})['items']
+    assert [(i['kind'], i['listingId']) for i in items] == [('marked_price_rise', '1000000001')]
+    assert items[0]['title'] == 'Kısa listendeki ilanın fiyatı arttı' and items[0]['why'].startswith('6,5 M ₺ → 7,5 M ₺ · son değişiklik 2 gün önce')

@@ -15,7 +15,7 @@ READY_FROM = 60                 # a finished listing is put forward from this sc
 FRESH_DAYS = 14                 # how long a price cut or a removal stays news
 DROP_FROM_PCT = 10              # an unmarked listing is put forward for a cut of this size
 
-ORDER = ('marked_price_drop', 'marked_removed', 'verify_cheap', 'ready', 'price_drop', 'clarify')      # what comes first when there is more than fits
+ORDER = ('marked_price_drop', 'marked_price_rise', 'marked_removed', 'verify_cheap', 'ready', 'price_drop', 'clarify')      # what comes first when there is more than fits
 
 MARK_TR = {'shortlist': 'Kısa listendeki', 'maybe': '"Belki" dediğin'}
 
@@ -83,7 +83,7 @@ def today(store, *, mode='local', now=None, ranked=None, queue=None, limit=LIMIT
     if ranked is None:
         ranked = opportunity.rank_all(store, mode=mode, now=now)['ranked']
     marks = signals.user_marks(store)
-    candidates = {'marked_price_drop': [], 'marked_removed': [], 'ready': [], 'price_drop': [], 'verify_cheap': [], 'clarify': []}
+    candidates = {'marked_price_drop': [], 'marked_price_rise': [], 'marked_removed': [], 'ready': [], 'price_drop': [], 'verify_cheap': [], 'clarify': []}
     for row in ranked:
         new, mark, moved = row.get('new') or {}, row.get('mark'), row.get('price_trend')
         if mark == 'excluded':
@@ -92,6 +92,13 @@ def today(store, *, mode='local', now=None, ranked=None, queue=None, limit=LIMIT
         path = f"{money(moved['from'])} → {money(moved['to'])} · {signals.describe(moved)} · son değişiklik {_ago(now - moved['last_change_at'])}" if moved else None
         if mark in MARK_TR and fell:
             candidates['marked_price_drop'].append(_item('marked_price_drop', row, f'{MARK_TR[mark]} ilanın fiyatı düştü', path, 'Görmeye ya da teklif vermeye değer mi?', int(moved['last_change_at'])))
+        steps = (moved or {}).get('steps') or []
+        if mark in MARK_TR and moved and moved['last_move'] == 'up' and len(steps) >= 2 and now - moved['last_change_at'] <= FRESH_DAYS * 86400:
+            before, after = steps[-2][1], steps[-1][1]
+            if before and (after - before) / before * 100 >= signals.MIN_DROP_PCT:
+                candidates['marked_price_rise'].append(_item('marked_price_rise', row, f'{MARK_TR[mark]} ilanın fiyatı arttı',
+                                                             f"{money(before)} → {money(after)} · son değişiklik {_ago(now - moved['last_change_at'])}" + (f' · {path}' if path else ''),
+                                                             'Satıcıya sebebini ve son fiyatı sormaya değer mi?', int(moved['last_change_at'])))
         if any('çok ucuz' in cap for cap in new.get('caps') or []):
             fair = new.get('fair_unit_price')
             rate = round(row['price_tl'] / row['area_m2']) if row.get('price_tl') and row.get('area_m2') else None

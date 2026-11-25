@@ -31,6 +31,7 @@ ANSWER_SECONDS = 300            # a question waits this long for the agent befor
 CONFIRM_SECONDS = 600           # a proposed change waits this long for the owner's yes
 LATE_SECONDS = 1800             # a late answer is still delivered within this time, then forgotten
 CHUNK = 3900                    # Telegram takes 4096 characters per message
+BRIEF_FORGET_DAYS = 30           # a topic told this long ago may be told again
 BRIEF_HOUR = 9                  # local hour from which the day's decisions are sent, once a day
 STALE_SECONDS = 900             # a bridge that has not reported for this long counts as down
 HELP = ('Verda. Soru sorabilirsin ya da:\n/bugun: bugün senden beklenenler\n/liste: en yüksek puanlı adaylar (/liste 10)\n'
@@ -128,7 +129,8 @@ def load_state(store):
     if not isinstance(data, dict):
         data = {}
     return {'chat_id': data.get('chat_id'), 'pending': data.get('pending') or {}, 'offset': int(data.get('offset') or 0), 'brief_day': data.get('brief_day'),
-            'brief': data.get('brief', True) is not False, 'waiting': data.get('waiting') or {}, 'confirm': data.get('confirm')}
+            'brief': data.get('brief', True) is not False, 'waiting': data.get('waiting') or {}, 'confirm': data.get('confirm'),
+            'brief_sent': data.get('brief_sent') or {}}
 
 
 @contextmanager
@@ -450,17 +452,25 @@ class Bridge:
                 state['waiting'][task] = entry
 
     def _brief(self, now):
+        """Once a day, only what was not told before: a topic sent once stays off the brief until it changes (a new price is a new topic).
+        /bugun still shows the whole list."""
         state = load_state(self.store)
         local = time.localtime(now)
         day = time.strftime('%Y-%m-%d', local)
         if state['chat_id'] is None or not state['brief'] or state['brief_day'] == day or local.tm_hour < BRIEF_HOUR:
             return
-        picked = chat.today(self.store)
-        if picked['items']:                           # a send that fails leaves the day unmarked: tried again on a later round
-            self.send(state['chat_id'], f"Günaydın. Bugün {len(picked['items'])} konu var:\n\n{picked['text']}\n\nSabah özetini kapatmak için: /ozet kapat")
+        from verda.agency import decisions
+        items = chat.today(self.store)['items']
+        sent = state['brief_sent']
+        new = [i for i in items if i['key'] not in sent]
+        told = len(items) - len(new)
+        if new:                                       # a send that fails leaves the day unmarked: tried again on a later round
+            rest = f"\n\nDaha önce bildirdiğim {told} konu hâlâ açık; hepsi için /bugun." if told else ''
+            self.send(state['chat_id'], f"Günaydın. {len(new)} yeni konu var:\n\n{decisions.as_text({'items': new})}{rest}\n\nSabah özetini kapatmak için: /ozet kapat")
         with changing(self.store) as state:
             state['brief_day'] = day
-
+            kept = {k: d for k, d in state['brief_sent'].items() if d >= time.strftime('%Y-%m-%d', time.localtime(now - BRIEF_FORGET_DAYS * 86400))}
+            state['brief_sent'] = kept | {i['key']: day for i in new}
 
 def run(store, *, env_file=DEFAULT_ENV, continuous=False, api_factory=Api, sleep=time.sleep, now=time.time):
     """The service loop. Without a token it waits for the owner to put one in the env file; a network fault never stops it."""

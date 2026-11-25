@@ -222,21 +222,29 @@ def test_a_late_answer_is_said_to_be_late_and_a_question_nobody_took_is_withdraw
 
 def test_the_days_decisions_are_sent_once_a_day_after_nine_and_can_be_switched_off(tmp_path, monkeypatch):
     store, _, api, clock, bridge = paired(tmp_path, monkeypatch)
-    picked = {'items': [{'title': 'a'}, {'title': 'b'}], 'counts': {}, 'text': '1. a\n2. b'}
+    item = lambda key, title: {'key': key, 'title': title, 'why': 'w', 'ask': 'q', 'listingId': None, 'links': {}}
+    picked = {'items': [item('a', 'a'), item('b', 'b')], 'counts': {}}
     monkeypatch.setattr(chat, 'today', lambda store, args=None, mode='local': picked)
     bridge.tick()
     assert api.sent == []                                                                  # 07:00: too early
     clock.at += 2.5 * 3600
     bridge.tick()
     bridge.tick()
-    assert len(api.sent) == 1 and api.texts()[0].startswith('Günaydın. Bugün 2 konu var:\n\n1. a\n2. b')
+    assert len(api.sent) == 1 and api.texts()[0].startswith('Günaydın. 2 yeni konu var:\n\n1. a\n')
+    # 25 Nov 2026: the owner got the same topics every morning. A topic told once is not told again; a new one comes with a count of the rest.
+    clock.at += 86400
+    bridge.tick()
+    assert len(api.sent) == 1                                                              # nothing new: no message at all
+    picked['items'] = [item('a', 'a'), item('b', 'b'), item('c', 'c')]
     clock.at += 86400
     api.fail_send = telegram.Unreachable('network')
     with pytest.raises(telegram.Unreachable):
         bridge.tick()
     api.fail_send = None
     bridge.tick()
-    assert len(api.sent) == 2                                                              # a send that failed is tried again, then the day is done
+    assert len(api.sent) == 2 and api.texts()[-1].startswith('Günaydın. 1 yeni konu var:\n\n1. c\n')   # a send that failed is tried again
+    assert 'Daha önce bildirdiğim 2 konu hâlâ açık; hepsi için /bugun.' in api.texts()[-1]
+    picked['items'] = [item('d', 'd')]
     api.say(2, '/ozet kapat')
     bridge.poll()
     assert api.texts()[-1] == 'Sabah özeti kapalı.'

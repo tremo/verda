@@ -263,8 +263,34 @@ def wait_loaded(evaluate, *, seconds=NAVIGATION_SECONDS, sleep=time.sleep, clock
     return False
 
 
+VERDA_TAB = Path(os.environ.get('VERDA_TAB', '.local/verda-tab.json'))
+
+
+def own_tab(cdp, path=None):
+    """Verda's one tab, in a Chrome window of its own: reused while it is open, made again in a new window when it was closed.
+
+    25 Nov 2026: a new tab per job landed in whatever Chrome window was in front, usually the one the owner was working in, and took it over.
+    A page change in an existing tab does not bring its window forward, so the owner keeps working on another screen. One job runs at a time
+    (the worker loop), so one tab is enough. It is never registered as a stray tab: the stale-tab sweep must not close it."""
+    path = path or VERDA_TAB
+    try:
+        known = json.loads(path.read_text()).get('id')
+    except (OSError, ValueError, AttributeError):
+        known = None
+    if known and any(t.get('targetId') == known and t.get('type') == 'page' for t in cdp('Target.getTargets').get('targetInfos', [])):
+        return known
+    target = cdp('Target.createTarget', url='about:blank', newWindow=True)['targetId']
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, 'w') as out:
+            json.dump({'id': target, 'at': time.time()}, out)
+    except OSError:
+        pass
+    return target
+
+
 def visible_browser(url):
-    """A plain foreground tab in the user's own Chrome profile and session.
+    """Verda's own visible tab in the user's own Chrome profile and session (see `own_tab`).
 
     No hidden tab, no fake focus, no fake window size: what happens is what the user sees.
     """
@@ -275,11 +301,18 @@ def visible_browser(url):
     class Visible(Browser):
         def __init__(self, url):
             ensure_daemon()
-            self.target = cdp('Target.createTarget', url='about:blank')['targetId']
-            register_tab(self.target)
+            self.target = own_tab(cdp)
             self.session = cdp('Target.attachToTarget', targetId=self.target, flatten=True)['sessionId']
             self.call('Page.navigate', url=url, _response_timeout=NAVIGATION_SECONDS)      # the site's answer may take longer than the harness's usual 5 s
             wait_loaded(self.evaluate)
+
+        def close(self):
+            """The job is done with the tab; the tab stays for the next job."""
+            if self.target:
+                try:
+                    cdp('Target.detachFromTarget', sessionId=self.session)
+                finally:
+                    self.target = None
     return Visible(url)
 
 

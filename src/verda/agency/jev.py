@@ -86,6 +86,15 @@ def target_url(store, job):
         if args.get('page', 1) > 1:
             filters['pagingOffset'] = (args['page'] - 1) * PAGE_SIZE
         return 'https://www.sahibinden.com/satilik-arsa/mugla-datca?' + urlencode(filters)
+    if job['tool'] == 'region.search':
+        from verda.agency import regions
+        return regions.search_url(job['arguments'])
+    if job['tool'] == 'region.read_listing':
+        from verda.agency import regions
+        url = regions.known_url(store, job['arguments']['ilan'])
+        if not url:
+            raise JevStopped()           # only an address a region search card showed
+        return url
     if job['tool'] != 'sahibinden.read_listing':
         raise JevStopped()
     url = known_listing_url(store, job['arguments']['listing_id'])
@@ -136,6 +145,15 @@ def legacy_listing_url(store, listing_id):
     return None
 
 
+def job_listing_id(job):
+    """The listing a detail-read job is about (a region read names it `ilan`, so its record is never linked to a Datça listing); None for a search."""
+    if job['tool'] == 'sahibinden.read_listing':
+        return job['arguments']['listing_id']
+    if job['tool'] == 'region.read_listing':
+        return job['arguments']['ilan']
+    return None
+
+
 def verify_receipt(job, raw):
     from verda.agency.browser import source_url, Listing, SearchReceipt, BLOCKERS
     if raw.get('blocker') in BLOCKERS:
@@ -144,17 +162,24 @@ def verify_receipt(job, raw):
     if classify_url(url):
         raise JevStopped(classify_url(url))
     source_url(url)
-    if job['tool'] == 'sahibinden.read_listing' and raw.get('removed') and not raw.get('detail'):
+    wanted_id = job_listing_id(job)
+    if wanted_id and raw.get('removed') and not raw.get('detail'):
         from verda.agency.browser import ListingGone
-        return ListingGone.model_validate({'listing_id': job['arguments']['listing_id'], 'unavailable': True,
+        return ListingGone.model_validate({'listing_id': wanted_id, 'unavailable': True,
                                            'notice': 'Görüntülemek istediğiniz ilan yayında değildir.', 'final_url': url}).model_dump()
-    if job['tool'] == 'sahibinden.read_listing':
+    if wanted_id:
         result = Listing.model_validate(raw.get('detail')).model_dump()
-        if result['listing_id'] != job['arguments']['listing_id'] or result['url'] != url:
+        if result['listing_id'] != wanted_id or result['url'] != url:
             raise ValueError('Wrong listing')
         return result
     params = parse_qs(urlparse(url).query)
-    filters = {'max_price_tl': job['arguments'].get('max_price_tl',15000000), 'min_area_m2': job['arguments'].get('min_area_m2',1000)}
+    if job['tool'] == 'region.search':
+        from verda.agency import regions
+        filters = regions.filters_of(job['arguments'])
+        if not regions.search_path_ok(url, job['arguments']):
+            raise ValueError('Wrong region page')
+    else:
+        filters = {'max_price_tl': job['arguments'].get('max_price_tl',15000000), 'min_area_m2': job['arguments'].get('min_area_m2',1000)}
     for key, value in [('price_max', filters['max_price_tl']), ('a507_min', filters['min_area_m2'])]:
         if len(params.get(key, [])) != 1 or float(params[key][0]) != value:
             raise ValueError('Filters not applied')
@@ -169,7 +194,8 @@ def verify_receipt(job, raw):
         raise ValueError('Unverified results')
     if len({row['listing_id'] for row in rows}) != len(rows):
         raise ValueError('Duplicate source rows')
-    result = SearchReceipt.model_validate({'source_url':url,'filters':filters,'total_reported':total,
+    from verda.agency.browser import RegionSearchReceipt
+    result = (RegionSearchReceipt if job['tool'] == 'region.search' else SearchReceipt).model_validate({'source_url':url,'filters':filters,'total_reported':total,
         'page':page,'has_more':total>(page-1)*PAGE_SIZE+len(rows),'listings':rows}).model_dump()
     for row in result['listings']:
         if row['price_tl'] is not None and row['price_tl'] > filters['max_price_tl']:
@@ -805,7 +831,7 @@ class JevReader:
                 if signal:
                     raise JevStopped(signal)
                 source_url(page['url'])
-                if raw.get('removed') and job['tool'] == 'sahibinden.read_listing':
+                if raw.get('removed') and job_listing_id(job):
                     progress('observed')
                     result = verify_receipt(job, raw)         # the page itself says the ad is gone: that is the receipt
                     progress('verified')
@@ -831,7 +857,8 @@ class JevReader:
                         'Choose DONE when the requested search results or listing details have loaded. '
                         'Use scrolling or WAIT only if needed to see loaded content. Stop BLOCKED at any access challenge. '
                         'An independent DOM reader will extract and verify the result. Task: ' +
-                        ('Datça land search, first page only.' if job['tool']=='sahibinden.search' else 'Read listing ' + job['arguments']['listing_id']))
+                        ('Datça land search, first page only.' if job['tool']=='sahibinden.search' else 'Land search result page.' if job['tool']=='region.search'
+                         else 'Read listing ' + job_listing_id(job)))
                 try:
                     decision = (self.chooser or choose)(scoped_page(page), goal, history)
                 except Exception as error:

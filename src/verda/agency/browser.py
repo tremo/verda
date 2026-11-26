@@ -12,7 +12,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator, model_validator
 from verda.legacy import canonical, digest
 
-READ_TOOLS = {'sahibinden.search', 'sahibinden.read_listing', 'sahibinden.read_thread', 'sahibinden.list_inbox', 'sahibinden.login', 'sahibinden.login_click'}
+READ_TOOLS = {'sahibinden.search', 'sahibinden.read_listing', 'sahibinden.read_thread', 'sahibinden.list_inbox', 'sahibinden.login', 'sahibinden.login_click',
+              'region.search', 'region.read_listing'}        # region.*: searches outside Datça (agency/regions.py), never linked to Datça listings
 LOGIN_TOOLS = {'sahibinden.login', 'sahibinden.login_click'}
 SEND_TOOL = 'sahibinden.send_message'          # the one browser tool that writes: gated and recorded by `message`, run by `send`
 BLOCKERS = {'captcha', 'otp', 'rate_limited', 'access_denied', 'session_lost', 'unusual_access'}
@@ -226,6 +227,18 @@ class SearchReceipt(BaseModel):
         return value
 
 
+class RegionSearchReceipt(SearchReceipt):
+    """A result page of a search outside Datça: one of the configured town paths (agency/regions.py), nothing else."""
+    @field_validator('source_url')
+    @classmethod
+    def search_url(cls, value):
+        from verda.agency.regions import allowed_paths
+        source_url(value)
+        if urlparse(value).path.rstrip('/') not in allowed_paths():
+            raise ValueError('Region search URL required')
+        return value
+
+
 class BrowserBridge:
     def __init__(self, store):
         self.store = store
@@ -386,6 +399,16 @@ class BrowserBridge:
                         values = params.get(url_key, [])
                         if len(values) != 1 or float(values[0]) != value:
                             raise ValueError('Search URL does not preserve the observed filters')
+                elif tool.key == 'region.search':
+                    from verda.agency import regions
+                    result = RegionSearchReceipt.model_validate(result).model_dump()
+                    if result['filters'] != regions.filters_of(args) or result['page'] != args.get('page', 1) or not regions.search_path_ok(result['source_url'], args):
+                        raise ValueError('Region search does not match the assigned task')
+                elif tool.key == 'region.read_listing':
+                    model = ListingGone if isinstance(result, dict) and result.get('unavailable') else Listing
+                    result = model.model_validate(result).model_dump()
+                    if result['listing_id'] != args['ilan']:
+                        raise ValueError('Wrong listing receipt')
                 elif tool.key in LOGIN_TOOLS:
                     result = LoginReceipt.model_validate(result).model_dump()
                 elif tool.key == 'sahibinden.list_inbox':

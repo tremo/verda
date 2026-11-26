@@ -80,6 +80,10 @@ def add_commands(parser, commands):
     scan.add_argument('--mode', choices=['daily', 'full'], default='daily')
     scan.add_argument('--env-file', type=Path)
     scan.add_argument('--no-details', action='store_true', help='Walk the result pages only; read no listing detail')
+    region_scan = commands.add_parser('agency-region-scan', help='Read-only scan of a search outside Datça; the running services do the reads')
+    region_scan.add_argument('--region', choices=['latmos'], default='latmos')
+    region_scan.add_argument('--town', action='append', help='Only these towns (repeatable)')
+    region_scan.add_argument('--no-details', action='store_true')
     sync = commands.add_parser('agency-inbox-sync')
     sync.add_argument('--env-file', type=Path)
     telegram = commands.add_parser('agency-telegram', help='Verda over Telegram: answers the one paired chat (outbound connection only)')
@@ -118,6 +122,10 @@ def run(args):
             return run_sync(store, step=sync_step)
         finally:
             sync_engine.close()
+    if command == 'agency-region-scan':
+        from verda.agency import regions
+        # Only submits and waits: the agency and browser services already running do the reads, one at a time, in Verda's own tab.
+        return regions.scan(store, args.region, towns=args.town, read_details=not args.no_details)
     if command == 'agency-scan':
         from verda.agency.discovery import run_scan
         from verda.agency.jev import run_worker

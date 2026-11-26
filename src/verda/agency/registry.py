@@ -64,7 +64,8 @@ class AgencyConfig(BaseModel):
                 raise ValueError("Unknown tool or delegation target")
         for t in self.tools:
             Draft202012Validator.check_schema(t.input_schema)
-            if t.transport == 'browser' and not ((t.effect == 'read' and t.key in {'sahibinden.search', 'sahibinden.read_listing', 'sahibinden.read_thread', 'sahibinden.list_inbox', 'sahibinden.login', 'sahibinden.login_click'})
+            if t.transport == 'browser' and not ((t.effect == 'read' and t.key in {'sahibinden.search', 'sahibinden.read_listing', 'sahibinden.read_thread', 'sahibinden.list_inbox', 'sahibinden.login', 'sahibinden.login_click',
+                                                                                                  'region.search', 'region.read_listing'})
                                                  or (t.effect == 'write' and t.key == 'sahibinden.send_message')):
                 raise ValueError('Browser bridge only supports registered Sahibinden reads and the registered sender')
             if t.effect == "write" and not t.resource:

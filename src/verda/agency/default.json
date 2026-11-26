@@ -93,6 +93,18 @@
       "delegates": [],
       "version": "4",
       "max_turns": 16
+    },
+    {
+      "key": "region",
+      "label": "Bölge araması",
+      "description": "Datça dışındaki ayrı aramaların (ilk: Latmos zeytinlikleri) sonuç sayfalarını ve ilan ayrıntılarını yalnızca okur. Datça akışına kayıt bağlamaz; satıcıya yazmaz.",
+      "prompt": "Sen bölge araması operatörüsün. Yalnızca atanan okuma aracını çalıştırırsın; satıcıya yazmaz, başka araç kullanmazsın.",
+      "tools": [
+        "region.search",
+        "region.read_listing"
+      ],
+      "delegates": [],
+      "version": "1"
     }
   ],
   "tools": [
@@ -957,6 +969,86 @@
       "input_schema": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "region.search",
+      "label": "Bölge ilan araması",
+      "description": "Bir bölge aramasının (ör. Latmos) tanımlı ilçe sonuç sayfasını bölgenin kendi fiyat ve alan filtreleriyle mevcut Chrome oturumunda okur. Sayfa başına 20 ilan.",
+      "resource": "sahibinden",
+      "effect": "read",
+      "min_interval_seconds": 0.5,
+      "max_interval_seconds": 6,
+      "transport": "browser",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "region": {
+            "type": "string",
+            "enum": [
+              "latmos"
+            ]
+          },
+          "town": {
+            "type": "string",
+            "enum": [
+              "milas",
+              "karpuzlu",
+              "cine",
+              "kocarli",
+              "soke"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30,
+            "default": 1
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "default",
+              "newest"
+            ],
+            "default": "default"
+          }
+        },
+        "required": [
+          "region",
+          "town"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "key": "region.read_listing",
+      "label": "Bölge ilan ayrıntısı",
+      "description": "Bölge aramasında görülmüş bir ilanın ayrıntısını okur. Kayıt Datça ilanlarına bağlanmaz.",
+      "resource": "sahibinden",
+      "effect": "read",
+      "min_interval_seconds": 0.5,
+      "max_interval_seconds": 6,
+      "transport": "browser",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "region": {
+            "type": "string",
+            "enum": [
+              "latmos"
+            ]
+          },
+          "ilan": {
+            "type": "string",
+            "pattern": "^[0-9]{8,14}$"
+          }
+        },
+        "required": [
+          "region",
+          "ilan"
+        ],
         "additionalProperties": false
       }
     }

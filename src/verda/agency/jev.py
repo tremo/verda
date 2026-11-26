@@ -6,6 +6,7 @@ fixed code-owned selectors and the code-written text, never a model-selected cli
 """
 import importlib.metadata
 import json
+import logging
 import os
 from pathlib import Path
 import random
@@ -299,20 +300,40 @@ def visible_browser(url):
     from browser_harness.helpers import cdp
 
     class Visible(Browser):
+        close_keeps_tab = True          # close() only lets go of the job's session; readers always call it, even when the tab stays for the user
+
         def __init__(self, url):
-            ensure_daemon()
-            self.target = own_tab(cdp)
-            self.session = cdp('Target.attachToTarget', targetId=self.target, flatten=True)['sessionId']
-            self.call('Page.navigate', url=url, _response_timeout=NAVIGATION_SECONDS)      # the site's answer may take longer than the harness's usual 5 s
-            wait_loaded(self.evaluate)
+            self.target = self.session = None
+            try:
+                ensure_daemon()
+                self.target = own_tab(cdp)
+                self.session = cdp('Target.attachToTarget', targetId=self.target, flatten=True)['sessionId']
+                result = self.call('Page.navigate', url=url, _response_timeout=NAVIGATION_SECONDS)      # the site's answer may take longer than the harness's usual 5 s
+                if not isinstance(result, dict) or result.get('errorText') or not result.get('frameId'):
+                    raise JevStopped()      # a failed or lost answer must not leave us reading the previous page
+                wait_loaded(self.evaluate)
+            except BaseException:
+                self.close()                # the caller never gets an object it could clean up
+                raise
+
+        def call(self, method, **params):
+            if not self.session:
+                raise JevStopped()          # without a session the harness would use its own default tab
+            return super().call(method, **params)
+
+        def observe(self, screenshot=True):
+            if not self.session:
+                raise JevStopped()          # Browser.observe talks to the harness without going through call()
+            return super().observe(screenshot=screenshot)
 
         def close(self):
-            """The job is done with the tab; the tab stays for the next job."""
-            if self.target:
+            """The job is done with the tab; the tab stays for the next job. At most one detach; a failure never replaces the job's outcome."""
+            session, self.session, self.target = self.session, None, None
+            if session:
                 try:
-                    cdp('Target.detachFromTarget', sessionId=self.session)
-                finally:
-                    self.target = None
+                    cdp('Target.detachFromTarget', sessionId=session, _response_timeout=5)
+                except Exception as error:
+                    logging.getLogger(__name__).warning('CDP session cleanup failed (%s)', type(error).__name__)
     return Visible(url)
 
 
@@ -573,7 +594,7 @@ class InboxReader:
             finished = True
             return result
         finally:
-            if finished or not self.keep_open:
+            if finished or not self.keep_open or getattr(browser, 'close_keeps_tab', False):
                 try:
                     browser.close()
                 except Exception:
@@ -715,8 +736,9 @@ class ThreadReader:
             finished = True
             return result
         finally:
-            # A finished read leaves nothing open; a stopped one stays for the user when asked (security check).
-            if finished or not self.keep_open:
+            # A finished read leaves nothing open; a stopped one stays for the user when asked (security check). A tab that
+            # stays anyway (Verda's own) still lets go of its session.
+            if finished or not self.keep_open or getattr(browser, 'close_keeps_tab', False):
                 try:
                     browser.close()
                 except Exception:
@@ -850,7 +872,7 @@ class JevReader:
                 history.append({'action':action['label'],'kind':action['kind'],'text':None,'page_changed':None})
             raise JevStopped()
         finally:
-            if not (leave_open or (self.keep_open and not finished)):
+            if getattr(browser, 'close_keeps_tab', False) or not (leave_open or (self.keep_open and not finished)):
                 try:
                     browser.close()
                 except Exception:
